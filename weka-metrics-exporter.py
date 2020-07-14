@@ -1,4 +1,4 @@
-#! /usr/bin/env python2
+#! /usr/bin/env python3
 
 # Weka Prometheus client
 # Vince Fleming
@@ -46,6 +46,7 @@ class simul_threads():
         self.ids = 0                # thread id... a counter that increases over time
         self.staged = {}            # threads that need to be run - dict of {threadid:thread_object}
         self.running = {}           # currently running threads that will need to be reaped - dict (same as staged)
+        self.dead = {}
 
     # create a thread and put it in the list of threads
     def new( self, function, funcargs=None ):
@@ -56,19 +57,25 @@ class simul_threads():
             self.staged[self.ids] = threading.Thread( target=function, args=funcargs )
 
     def status( self ):
-        print "Current status of threads:"
+        print( "Current status of threads:" )
         for threadid, thread in self.running.items():
-            print "Threadid: " + str( threadid ) + " is " + ("alive" if thread.is_alive() else "dead")
+            print( "Threadid: " + str( threadid ) + " is " + ("alive" if thread.is_alive() else "dead") )
         for threadid, thread in self.staged.items():
-            print "Threadid: " + str( threadid ) + " is staged"
+            print( "Threadid: " + str( threadid ) + " is staged" )
         return len( self.staged ) + len( self.running )
 
     # look for threads that need reaping, start next thread
     def reaper( self ):
         for threadid, thread in self.running.items():
             if not thread.is_alive():
-                thread.join()                   # reap it
+                thread.join()                   # reap it (wait for it)
+                self.dead[threadid] = thread    # note that it's dead/done
+
+        # remove them from the running list
+        for threadid, thread in self.dead.items():
                 self.running.pop( threadid )    # delete it from the running list
+
+        self.dead = {}                          # reset dead list, as we're done with those threads
 
     # start threads, but only a few at a time
     def starter( self ):
@@ -244,7 +251,7 @@ class wekaCollector():
             gaugekey = category+":"+stat
 
         if self.verbose:
-            print "executing: " + full_command
+            print( "executing: " + full_command )
         with self.cmd_exec_gauge.labels(gaugekey).time() as timer:
             try:
                 if category == None: ### think on this
@@ -257,7 +264,7 @@ class wekaCollector():
                         self.wekadata[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
             except:
                 syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command )
-                print "Error spawning command " + full_command
+                print( "Error spawning command " + full_command )
                 #self.wekadata[stat] = []    # hmm... not sure we want to do this
 
 
@@ -272,7 +279,7 @@ class wekaCollector():
                 thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
             except:
                 syslog.syslog( syslog.LOG_ERR, "collectinfo(): error scheduling thread wekainfo" )
-                print "Error contacting cluster"
+                print( "Error contacting cluster" )
                 return      # bail out if we can't talk to the cluster with this first command
 
         thread_runner.run()     # kick off threads; wait for them to complete
@@ -286,7 +293,7 @@ class wekaCollector():
                 self.servers.reset( serverlist )
             except KeyError:
                 syslog.syslog( syslog.LOG_ERR, "collectinfo(): No data retrieved from cluster - is the cluster down?" )
-                print "Error No data retrieved from cluster - is the cluster down?"
+                print( "Error No data retrieved from cluster - is the cluster down?" )
                 return      # bail out if we can't talk to the cluster with this first command
 
         thread_runner = simul_threads( self.servers.count() )   # up the server count
@@ -304,7 +311,7 @@ class wekaCollector():
                 self.weka_maps["host-role"][host["hostname"]] = "client"
         except:
             syslog.syslog( syslog.LOG_ERR, "collectinfo(): error building maps. Aborting data collection." )
-            print "Error building maps!"
+            print( "Error building maps!" )
             return
 
 
@@ -315,7 +322,7 @@ class wekaCollector():
                     thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
                 except:
                     syslog.syslog( syslog.LOG_ERR, "collectinfo(): error scheduling thread wekastat" )
-                    print "Error spawning thread"
+                    print( "Error spawning thread" )
 
         thread_runner.run()     # schedule the rest of the threads, wait for them
 
@@ -336,7 +343,7 @@ class wekaCollector():
                 cloudStatus="Disabled"      # disabled, healthy is meaningless
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing cloud status" )
-            print "Error processing Cloud Status!"
+            print( "Error processing Cloud Status!" )
 
         try:
             # Basic info
@@ -348,7 +355,7 @@ class wekaCollector():
             syslog.syslog( syslog.LOG_INFO, "collectinfo(): cluster name: " + self.wekadata["clusterinfo"]["name"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error cluster info - aborting populate" )
-            print "Error processing Basic info!"
+            print( "Error processing Basic info!" )
             return
 
         try:
@@ -364,7 +371,7 @@ class wekaCollector():
             self.gaugelist["weka_status"].labels( self.wekadata["clusterinfo"]["name"], WekaClusterStatus ).set( 0 ) 
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing weka status" )
-            print "Error processing weka status indicator!"
+            print( "Error processing weka status indicator!" )
 
         try:
             # Uptime
@@ -377,7 +384,7 @@ class wekaCollector():
             self.gaugelist["weka_uptime"].labels( self.wekadata["clusterinfo"]["name"] ).set( uptime.total_seconds() )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error calculating runtime" )
-            print "Error processing uptime!"
+            print( "Error processing uptime!" )
 
         try:
             # performance overview summary
@@ -399,7 +406,7 @@ class wekaCollector():
                     self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["obs_upload_bytes_per_second"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing performance overview" )
-            print "Error processing performance overview!"
+            print( "Error processing performance overview!" )
 
         try:
             # server overview
@@ -413,7 +420,7 @@ class wekaCollector():
                     self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["clients"]["total"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing server overview" )
-            print "Error processing server overview!"
+            print( "Error processing server overview!" )
 
         try:
             # capacity overview
@@ -431,7 +438,7 @@ class wekaCollector():
                     self.wekadata["clusterinfo"]["capacity"]["unprovisioned_bytes"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing capacity overview" )
-            print "Error processing capacity overview!"
+            print( "Error processing capacity overview!" )
 
         try:
             # protection status
@@ -443,7 +450,7 @@ class wekaCollector():
                         protectionStateList[index]["numFailures"] ).set( protectionStateList[index]["percent"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing protection status" )
-            print "Error processing protection status!"
+            print( "Error processing protection status!" )
 
         try:
             # Filesystem stats
@@ -462,7 +469,7 @@ class wekaCollector():
                         fs["used_total"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing filesystem stats" )
-            print "Error processing filesystem stats!"
+            print( "Error processing filesystem stats!" )
 
         try:
             # get all the IO stats...
@@ -487,7 +494,7 @@ class wekaCollector():
 
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
-            print "Error processing io stats!"
+            print( "Error processing io stats!" )
 
         # ------------- end of populate_stats() -------------
 
@@ -520,7 +527,7 @@ def sighup_handler(signal, frame):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
-    parser.add_argument("-c", "--configfile", dest='configfile', default="./weka_prom.yml", help="override ./weka_prom.yml as config file")
+    parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
     parser.add_argument("-p", "--port", dest='port', default="8000", help="TCP port number to listen on")
     parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host (hostname/ip) to collect stats from")
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
