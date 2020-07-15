@@ -10,7 +10,7 @@ Metrics exporter for WekaFS. Gathers metrics and statistics from a Weka Cluster 
 
 ## Metrics Exported
 
-1. Edit the weka-metrics-exporter.yaml file. All the metrics that can be collected are defined there. Note that the default contents are sufficient to populate the example dashboards. **Add ONLY what you need**. It does generate load on the cluster to collects these stats.
+1. Edit the weka-metrics-exporter.yml file. All the metrics that can be collected are defined there. Note that the default contents are sufficient to populate the example dashboards. **Add ONLY what you need**. It does generate load on the cluster to collects these stats.
 2. Uncomment any metrics you would like to gather that are commented out. Restart the exporter to start gathering those metrics.
 3. To display new metrics in Grafana, add new panel(s) and query. Try to curl the data from the metrics endpoint.
 
