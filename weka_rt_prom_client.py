@@ -1,4 +1,4 @@
-#! /usr/bin/env python2
+#! /usr/bin/env python3
 
 # Weka Prometheus client
 # Vince Fleming
@@ -46,6 +46,7 @@ class simul_threads():
         self.ids = 0                # thread id... a counter that increases over time
         self.staged = {}            # threads that need to be run - dict of {threadid:thread_object}
         self.running = {}           # currently running threads that will need to be reaped - dict (same as staged)
+        self.dead = {}
 
     # create a thread and put it in the list of threads
     def new( self, function, funcargs=None ):
@@ -56,25 +57,32 @@ class simul_threads():
             self.staged[self.ids] = threading.Thread( target=function, args=funcargs )
 
     def status( self ):
-        print "Current status of threads:"
+        print( "Current status of threads:" )
         for threadid, thread in self.running.items():
-            print "Threadid: " + str( threadid ) + " is " + ("alive" if thread.is_alive() else "dead")
+            print( "Threadid: " + str( threadid ) + " is " + ("alive" if thread.is_alive() else "dead") )
         for threadid, thread in self.staged.items():
-            print "Threadid: " + str( threadid ) + " is staged"
+            print( "Threadid: " + str( threadid ) + " is staged" )
         return len( self.staged ) + len( self.running )
+
 
     # look for threads that need reaping, start next thread
     def reaper( self ):
         for threadid, thread in self.running.items():
             if not thread.is_alive():
-                thread.join()                   # reap it
+                thread.join()                   # reap it (wait for it)
+                self.dead[threadid] = thread    # note that it's dead/done
+
+        # remove them from the running list
+        for threadid, thread in self.dead.items():
                 self.running.pop( threadid )    # delete it from the running list
+
+        self.dead = {}                          # reset dead list, as we're done with those threads
 
     # start threads, but only a few at a time
     def starter( self ):
         # only allow num_simultaneous threads to run at one time
-        #print "starter(): self.running has " + str( len( self.running ) ) + " items, and self.staged has " + str( len( self.staged ) ) + " items"
-        #print self.num_simultaneous
+        #print( "starter(): self.running has " + str( len( self.running ) ) + " items, and self.staged has " + str( len( self.staged ) ) + " items" )
+        #print( self.num_simultaneous )
         while len( self.running ) < self.num_simultaneous and len( self.staged ) > 0:
             threadid, thread = self.staged.popitem()    # take one off the staged list
             thread.start()                              # start it
@@ -182,7 +190,7 @@ class wekaCollector():
 
         # gauges to track this program's performance, etc
         self.cmd_exec_gauge = Gauge('weka_rt_prometheus_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
-        #print json.dumps(self.weka_stat_list, indent=2, sort_keys=True)
+        #print( json.dumps(self.weka_stat_list, indent=2, sort_keys=True) )
         # ------------- end of __init__() -------------
 
         
@@ -195,7 +203,7 @@ class wekaCollector():
             gaugekey = category+":"+stat
 
         if self.verbose:
-            print "executing: " + full_command
+            print( "executing: " + full_command )
         with self.cmd_exec_gauge.labels(gaugekey).time() as timer:
             try:
                 if category == None: ### think on this
@@ -208,7 +216,7 @@ class wekaCollector():
                         self.wekadata[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
             except:
                 syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command )
-                print "Error spawning command " + full_command
+                print( "Error spawning command " + full_command )
                 #self.wekadata[stat] = []    # hmm... not sure we want to do this
 
 
@@ -219,7 +227,7 @@ class wekaCollector():
         # get info from weka cluster
         if ( self.last_refresh >= 60 or          # refresh cluster info every minute
                 self.populate_error == 1):       # refresh if we got an error populating - meaning something's been added or removed
-            print "populating cluster info"
+            print( "populating cluster info" )
             self.populate_error = 0
             self.last_refresh = 0
             thread_runner = simul_threads( len( self.wekaInfo ) )    # have just enough threads to do this work. ??  Maybe should be 1 or 2?
@@ -228,7 +236,7 @@ class wekaCollector():
                     thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
                 except:
                     syslog.syslog( syslog.LOG_ERR, "collectinfo(): error scheduling thread wekainfo" )
-                    print "Error contacting cluster"
+                    print( "Error contacting cluster" )
                     return      # bail out if we can't talk to the cluster with this first command
 
             thread_runner.run()     # kick off threads; wait for them to complete
@@ -242,7 +250,7 @@ class wekaCollector():
                     self.servers.reset( serverlist )
                 except KeyError:
                     syslog.syslog( syslog.LOG_ERR, "collectinfo(): No data retrieved from cluster - is the cluster down?" )
-                    print "Error No data retrieved from cluster - is the cluster down?"
+                    print( "Error No data retrieved from cluster - is the cluster down?" )
                     return      # bail out if we can't talk to the cluster with this first command
 
 
@@ -259,14 +267,14 @@ class wekaCollector():
                     self.weka_maps["host-role"][host["hostname"]] = "client"
             except:
                 syslog.syslog( syslog.LOG_ERR, "collectinfo(): error building maps. Aborting data collection." )
-                print "Error building maps!"
+                print( "Error building maps!" )
                 return
 
         try:
             self._spawn("weka_realtime_stats", "stats realtime -R", self.servers.next(), None)
         except:
             syslog.syslog( syslog.LOG_ERR, "collectinfo(): error spawning weka stats" )
-            print "Error error spawning weka stats"
+            print( "Error error spawning weka stats" )
 
         self.last_refresh += 1  # keep track of how many times we've done this so we can refresh cluster state now and then
 
@@ -275,7 +283,7 @@ class wekaCollector():
     @populate_stats_gauge.time()
     def populate_stats( self ):
         if self.verbose:
-            print "starting populate_stats()"
+            print( "starting populate_stats()" )
         #syslog.syslog( syslog.LOG_INFO, "populate_stats(): populating statistics" )
         # if the cluster changed during a collection, this will puke, so just go to the next sample.
         #   One or two missing samples won't hurt
@@ -292,7 +300,7 @@ class wekaCollector():
                 #node_role = self.weka_maps["node-role"][node["node_id"]]
                 for stat in node:
                     for role in self.weka_maps["node-role"][node["node_id"]]:  # when role is a list
-                        #print "stat = " + stat
+                        #print( "stat = " + stat )
                         if not stat == "node_id":
                             self.gaugelist["weka_realtime_stats"].labels( 
                                 self.wekadata["clusterinfo"]["name"], 
@@ -304,11 +312,11 @@ class wekaCollector():
 
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
-            print "Error processing io stats!"
+            print( "Error processing io stats!" )
             self.populate_error = 1
 
         if self.verbose:
-            print "ending populate_stats()"
+            print( "ending populate_stats()" )
 
         # ------------- end of populate_stats() -------------
 
@@ -377,8 +385,8 @@ if __name__ == '__main__':
         # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
         now = time.time()
         time_to_sleep = abs(1 - (now - int( now ))) + .01
-        #print now
-        #print time_to_sleep
+        #print( now )
+        #print( time_to_sleep )
 
         # muppy memory utilization
         #sum1 = summary.summarize(all_objects)
