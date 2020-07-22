@@ -37,6 +37,26 @@ It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter.py -a -H
 - `-p` port sets the port number - Default port is 8000
 - `-h` will print the help message.
 
+## Docker build instructions (optional)
+
+To build this repositiory:
+
+```docker build --tag weka-metrics-exporter https://github.com/weka/weka-metrics-exporter.git```
+
+To save and/or load the image
+```
+docker save -o weka-metrics-exporter.tar weka-metrics-exporter
+docker load -i  weka-metrics-exporter.tar
+```
+
+To run the image:  (one or the other)
+```
+docker run -d --network=host weka-metrics-exporter 172.20.40.1
+docker run -d -p 8001:8001 weka-metrics-exporter 172.20.40.1
+```
+
 Comments, issues, etc can be reported in the repository's issues.
 
 Maintained by vince@weka.io
+
+
