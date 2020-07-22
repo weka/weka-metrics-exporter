@@ -21,7 +21,7 @@
 #   Add this server:8000 to Prometheus's .yml configuration
 
 import prometheus_client
-from prometheus_client import start_http_server, Gauge, Info, Summary, Counter
+from prometheus_client import start_http_server, Gauge, Info, Summary, Counter, Histogram
 import time, datetime
 import json, yaml
 import os, sys, stat
@@ -31,6 +31,7 @@ import threading
 import syslog
 import os.path
 import signal
+import traceback
 #from pympler import muppy, summary
 
 
@@ -130,6 +131,17 @@ class cycleIterator():
 
 # ---------------- end of cycleIterator definition ------------
 
+class WekaIOHistogram(Histogram):
+    def multi_observe( self, iosize, value ):
+        """Observe the given amount."""
+        self._sum.inc(value)
+        for i, bound in enumerate(self._upper_bounds):
+            if float(iosize) <= bound:
+                self._buckets[i].inc(value)
+                break
+
+# ---------------- end of WekaIOHistogram definition ------------
+
 class wekaCollector():
 
     # types of things
@@ -177,6 +189,7 @@ class wekaCollector():
     # object instance global data
     wekaIOCommands = {}
     collected_data = {}
+    histograms = {}
     singlethreaded = False  # default
     loadbalance = True      # default
     verbose = False         # default
@@ -217,6 +230,26 @@ class wekaCollector():
             'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics',
             ['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
 
+        # set up buckets, [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, inf]
+        buckets=[]
+        for i in range(12,12+16):
+            buckets.append( 2 ** i )
+
+        buckets.append( float("inf") )
+        #print( buckets )
+
+        # create histograms for blocksize distribution metrics
+        for category, stat_dict in self.weka_stat_list.items():     # creates duplicates?
+            for stat, unit in stat_dict.items():
+                if unit == "sizes":
+                    #print( "category="+category+", stat="+stat )
+                    if not category in self.histograms:
+                       self.histograms[category] = {}
+
+                       self.histograms[category][stat] = WekaIOHistogram( "weka_blocksize_"+category+"_"+stat, "weka "+category+" "+stat+" blocksizes",
+                           labelnames=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'],
+                           buckets=buckets )   
+
         # cluster information
         # create guages, etc here - the stuff we'll collect
         self.gaugelist["wekaInfo"] = Info( 'weka', "Information about the Weka cluster" )
@@ -242,6 +275,19 @@ class wekaCollector():
             except AttributeError:
                 return yaml.load(f)
         
+    def _parse_sizes_values( self, value_string ):  # returns dict of {iosize:value,iosize:value}
+        # example input: "[32768..65536] 19486, [65536..131072] 1.57837e+06"
+        stat_dict={}
+        values_list = value_string.split( ", " ) # should be "[32768..65536] 19486","[65536..131072] 1.57837e+06"
+        for values_str in values_list:      # value_list should be "[32768..65536] 19486" the first time through
+            tmp = values_str.split( ".." )  # should be "[32768", "65536] 19486"
+            tmp2 = tmp[1].split( "] " )     # should be "65536","19486"
+            stat_dict[str(int(tmp2[0])-1)] = float( tmp2[1] )     # upper bound in weka stats is off by one
+
+        return stat_dict
+         
+
+
     def _spawn( self, stat, command, host, category ):     # would schedule() be a better name?
         # spawn a command
         full_command = "weka " + command + " -J -H " + host
@@ -471,30 +517,61 @@ class wekaCollector():
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing filesystem stats" )
             print( "Error processing filesystem stats!" )
 
-        try:
-            # get all the IO stats...
-            #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
-            #
-            # yes, I know it's convoluted... it was hard to write, so it *should* be hard to read. ;)
-            for category, stat_dict in self.weka_stat_list.items():
-                for stat, nodelist in self.wekadata[category].items():
-                    unit = stat_dict[stat]
-                    for node in nodelist:
+        # get all the IO stats...
+        #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
+        #
+        # yes, I know it's convoluted... it was hard to write, so it *should* be hard to read. ;)
+        for category, stat_dict in self.weka_stat_list.items():
+            for stat, nodelist in self.wekadata[category].items():
+                unit = stat_dict[stat]
+                for node in nodelist:
+                    try:
                         hostname = self.weka_maps["node-host"][node["node"]]    # save this because the syntax is gnarly
-                        for role in self.weka_maps["node-role"][node["node"]]:  # when role is a list
-                            self.gaugelist["weka_stats"].labels( 
-                                self.wekadata["clusterinfo"]["name"], 
-                                hostname,
-                                self.weka_maps["host-role"][hostname], 
-                                node["node"], 
-                                role,
-                                category,
-                                stat,
-                                unit ).set( node["stat_value"] )
+                        role_list = self.weka_maps["node-role"][node["node"]]
+                    except:
+                        print( "Error in maps" )
+                        continue            # or return?
 
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
-            print( "Error processing io stats!" )
+                    for role in role_list:
+                        if unit != "sizes":
+                            try:
+                                self.gaugelist["weka_stats"].labels( 
+                                    self.wekadata["clusterinfo"]["name"], 
+                                    hostname,
+                                    self.weka_maps["host-role"][hostname], 
+                                    node["node"], 
+                                    role,
+                                    category,
+                                    stat,
+                                    unit ).set( node["stat_value"] )
+                            except:
+                                track = traceback.format_exc()
+                                print(track)
+                                syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
+                                print( "Error processing io stats!" )
+                        else:
+                            try:
+                                value_dict = self._parse_sizes_values( node["stat_value"] )  # Turn the stat_value into a dict
+                                for iosize, value in value_dict.items():
+                                    print( "processing \""+node["stat_value"]+"\", iosize="+str(iosize)+", value="+str(value) )
+                                    self.histograms[category][stat].labels(   
+                                        self.wekadata["clusterinfo"]["name"], 
+                                        hostname,
+                                        self.weka_maps["host-role"][hostname], 
+                                        node["node"], 
+                                        role,
+                                        category,
+                                        stat,
+                                        unit ).multi_observe( iosize, value )
+                            except:
+                                track = traceback.format_exc()
+                                print(track)
+                                syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io sizes" )
+                                print( "Error processing io sizes!" )
+
+        #except:
+        #    syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
+        #    print( "Error processing io stats!" )
 
         # ------------- end of populate_stats() -------------
 
@@ -528,7 +605,7 @@ def sighup_handler(signal, frame):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
     parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
-    parser.add_argument("-p", "--port", dest='port', default="8000", help="TCP port number to listen on")
+    parser.add_argument("-p", "--port", dest='port', default="8001", help="TCP port number to listen on")
     parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host (hostname/ip) to collect stats from")
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbose", dest='verbose', default=False, action="store_true", help="Enable verbose output" )
