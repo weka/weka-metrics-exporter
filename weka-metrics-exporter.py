@@ -529,6 +529,7 @@ class wekaCollector():
                         hostname = self.weka_maps["node-host"][node["node"]]    # save this because the syntax is gnarly
                         role_list = self.weka_maps["node-role"][node["node"]]
                     except:
+                        syslog.syslog( syslog.LOG_ERR, "populate_stats(): error in maps" )
                         print( "Error in maps" )
                         continue            # or return?
 
@@ -553,7 +554,7 @@ class wekaCollector():
                             try:
                                 value_dict = self._parse_sizes_values( node["stat_value"] )  # Turn the stat_value into a dict
                                 for iosize, value in value_dict.items():
-                                    print( "processing \""+node["stat_value"]+"\", iosize="+str(iosize)+", value="+str(value) )
+                                    #print( "processing \""+node["stat_value"]+"\", iosize="+str(iosize)+", value="+str(value) )
                                     self.histograms[category][stat].labels(   
                                         self.wekadata["clusterinfo"]["name"], 
                                         hostname,
