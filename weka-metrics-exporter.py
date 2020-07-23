@@ -134,7 +134,7 @@ class cycleIterator():
 class WekaIOHistogram(Histogram):
     def multi_observe( self, iosize, value ):
         """Observe the given amount."""
-        self._sum.inc(value)
+        self._sum.inc(iosize * value)
         for i, bound in enumerate(self._upper_bounds):
             if float(iosize) <= bound:
                 self._buckets[i].inc(value)
