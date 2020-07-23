@@ -10,7 +10,7 @@ Metrics exporter for WekaFS. Gathers metrics and statistics from a Weka Cluster 
 
 ## Metrics Exported
 
-1. Edit the weka-metrics-exporter.yaml file. All the metrics that can be collected are defined there. Note that the default contents are sufficient to populate the example dashboards. **Add ONLY what you need**. It does generate load on the cluster to collects these stats.
+1. Edit the weka-metrics-exporter.yml file. All the metrics that can be collected are defined there. Note that the default contents are sufficient to populate the example dashboards. **Add ONLY what you need**. It does generate load on the cluster to collects these stats.
 2. Uncomment any metrics you would like to gather that are commented out. Restart the exporter to start gathering those metrics.
 3. To display new metrics in Grafana, add new panel(s) and query. Try to curl the data from the metrics endpoint.
 
@@ -41,6 +41,11 @@ It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter.py -a -H
 
 To build this repositiory:
 
+```
+git clone <this repo>
+docker build --tag weka-metrics-exporter .
+```
+or
 ```docker build --tag weka-metrics-exporter https://github.com/weka/weka-metrics-exporter.git```
 
 To save and/or load the image
@@ -58,5 +63,3 @@ docker run -d -p 8001:8001 weka-metrics-exporter 172.20.40.1
 Comments, issues, etc can be reported in the repository's issues.
 
 Maintained by vince@weka.io
-
-
