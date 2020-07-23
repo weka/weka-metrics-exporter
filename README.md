@@ -41,6 +41,11 @@ It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter.py -a -H
 
 To build this repositiory:
 
+```
+git clone <this repo>
+docker build --tag weka-metrics-exporter .
+```
+or
 ```docker build --tag weka-metrics-exporter https://github.com/weka/weka-metrics-exporter.git```
 
 To save and/or load the image
@@ -58,5 +63,3 @@ docker run -d -p 8001:8001 weka-metrics-exporter 172.20.40.1
 Comments, issues, etc can be reported in the repository's issues.
 
 Maintained by vince@weka.io
-
-
