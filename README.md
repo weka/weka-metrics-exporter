@@ -23,7 +23,7 @@ Configure prometheus to pull data from the Weka metrics exporter (see prometheus
 - job_name: 'weka'
   scrape_interval: 60s
   static_configs:
-    - targets: ['localhost:8000']
+    - targets: ['localhost:8001']
 ```
 
 *Important*: Currently the exporter pulls stats every 60 seconds so there is no use of setting the interval to a lower value.
@@ -34,7 +34,7 @@ It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter.py -a -H
 
 - Use the `-a` option to load-balance the data collection over all the Weka backends.
 - Use `-H` hostname as needed (for example, if you're not running this on a client or backend).
-- `-p` port sets the port number - Default port is 8000
+- `-p` port sets the port number - Default port is 8001
 - `-h` will print the help message.
 
 ## Docker build instructions (optional)
