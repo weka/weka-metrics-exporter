@@ -167,6 +167,8 @@ class wekaCollector():
         'weka_num_servers_total': ['Total number of weka servers', ['cluster']],
         'weka_num_clients_active': ['Number of active weka clients', ['cluster']],
         'weka_num_clients_total': ['Total number of weka clients', ['cluster']],
+        'weka_num_drives_active': ['Number of active weka drives', ['cluster']],
+        'weka_num_drives_total': ['Total number of weka drives', ['cluster']],
         'weka_status': ["Weka cluster status (OK, etc)", ['cluster','status']],
         'weka_uptime': ['Weka cluster uptime', ['cluster']]
         }
@@ -251,7 +253,6 @@ class wekaCollector():
                            buckets=buckets )   
 
         # cluster information
-        # create guages, etc here - the stuff we'll collect
         self.gaugelist["wekaInfo"] = Info( 'weka', "Information about the Weka cluster" )
 
         # general stats
@@ -464,6 +465,10 @@ class wekaCollector():
                     self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["clients"]["active"] )
             self.gaugelist["weka_num_clients_total"].labels(
                     self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["clients"]["total"] )
+            self.gaugelist["weka_num_drives_active"].labels(
+                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["drives"]["active"] )
+            self.gaugelist["weka_num_drives_total"].labels(
+                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["drives"]["total"] )
         except:
             syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing server overview" )
             print( "Error processing server overview!" )
