@@ -222,10 +222,10 @@ class wekaCollector():
             for stat, unit in stat_dict.items():
                 # have to create the category keys, so do it with a try: block
                 try:
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R -Z --per-node"
+                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R --per-node"
                 except KeyError:
                     self.wekaIOCommands[category] = {}
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R -Z --per-node"
+                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R --per-node"
 
         # one gauge to rule them all... all categories and stats are in the labels
         self.gaugelist["weka_stats"] = Gauge( 'weka_stats',
