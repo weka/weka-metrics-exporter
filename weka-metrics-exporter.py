@@ -21,13 +21,15 @@
 #   Add this server:8000 to Prometheus's .yml configuration
 
 import prometheus_client
-from prometheus_client import start_http_server, Gauge, Info, Summary, Counter, Histogram
+from prometheus_client import start_http_server, Gauge, Info, Summary, Counter, Histogram, REGISTRY
+from prometheus_client.core import GaugeMetricFamily, InfoMetricFamily, GaugeHistogramMetricFamily
 import time, datetime
 import json, yaml
 import os, sys, stat
 import subprocess
 import argparse
 import threading
+from threading import Lock
 import syslog
 import os.path
 import signal
@@ -157,34 +159,14 @@ class wekaCollector():
     weka_stat_list = {}
         # category: {{ stat:unit}, {stat:unit}}
 
-    clusterInfo = {
-        'weka_protection': ['Weka Data Protection Status', ['cluster','numFailures']],
-        'weka_host_spares': ['Weka cluster # of hot spares', ['cluster']],
-        'weka_host_spares_bytes': ['Weka capacity of hot spares', ['cluster']],
-        'weka_drive_storage_total_bytes': ['Weka total drive capacity', ['cluster']],
-        'weka_drive_storage_unprovisioned_bytes': ['Weka unprovisioned drive capacity', ['cluster']],
-        'weka_num_servers_active': ['Number of active weka servers', ['cluster']],
-        'weka_num_servers_total': ['Total number of weka servers', ['cluster']],
-        'weka_num_clients_active': ['Number of active weka clients', ['cluster']],
-        'weka_num_clients_total': ['Total number of weka clients', ['cluster']],
-        'weka_num_drives_active': ['Number of active weka drives', ['cluster']],
-        'weka_num_drives_total': ['Total number of weka drives', ['cluster']],
-        'weka_status': ["Weka cluster status (OK, etc)", ['cluster','status']],
-        'weka_uptime': ['Weka cluster uptime', ['cluster']]
-        }
     clusterStats = {
-        'weka_overview_activity_ops': ['Weka IO Summary number of operations', ['cluster']],
-        'weka_overview_activity_read_iops': ['Weka IO Summary number of read operations', ['cluster']],
-        'weka_overview_activity_read_bytespersec': ['Weka IO Summary read rate', ['cluster']],
-        'weka_overview_activity_write_iops': ['Weka IO Summary number of write operations', ['cluster']],
-        'weka_overview_activity_write_bytespersec': ['Weka IO Summary write rate', ['cluster']],
-        'weka_overview_activity_object_download_bytespersec': ['Weka IO Summary Object Download BPS', ['cluster']],
-        'weka_overview_activity_object_upload_bytespersec': ['Weka IO Summary Object Upload BPS', ['cluster']]
-        }
-    clusterFsStats = {
-        'weka_fs_utilization_percent': ['Filesystem % used', ['cluster','fsname']],
-        'weka_fs_size_bytes': ['Filesystem size', ['cluster','name']],
-        'weka_fs_used_bytes': ['Filesystem used capacity', ['cluster','name']]
+        'weka_overview_activity_ops': ['Weka IO Summary number of operations', ['cluster'], 'num_ops'],
+        'weka_overview_activity_read_iops': ['Weka IO Summary number of read operations', ['cluster'], 'num_reads'],
+        'weka_overview_activity_read_bytespersec': ['Weka IO Summary read rate', ['cluster'], 'sum_bytes_read'],
+        'weka_overview_activity_write_iops': ['Weka IO Summary number of write operations', ['cluster'], 'num_writes'],
+        'weka_overview_activity_write_bytespersec': ['Weka IO Summary write rate', ['cluster'], 'sum_bytes_written'],
+        'weka_overview_activity_object_download_bytespersec': ['Weka IO Summary Object Download BPS', ['cluster'], 'obs_download_bytes_per_second'],
+        'weka_overview_activity_object_upload_bytespersec': ['Weka IO Summary Object Upload BPS', ['cluster'], 'obs_upload_bytes_per_second']
         }
 
 
@@ -198,14 +180,15 @@ class wekaCollector():
     servers = None
     host = None
     wekadata = {}
+    buckets = []
     # figure out how to handle nodes that have more than one role...
     # maps are node-to-hostname, node-to-noderole (ie: FRONTEND, BACKEND, DRIVES), and host-to-hostrole (ie: server, client)
     weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }
-    gaugelist = {}
+    _access_lock = Lock()
 
     # instrument thyself
-    collectinfo_gauge = Gauge('weka_prometheus_collectinfo_gather_seconds', 'Time spent gathering cluster info')
-    populate_stats_gauge = Gauge('weka_prometheus_populate_stats_seconds', 'Time spent populating stats')
+    weka_metrics_gather_gauge = Gauge('weka_metrics_exporter_weka_metrics_gather_seconds', 'Time spent gathering cluster info')
+    prom_collect_gauge = Gauge('weka_metrics_exporter_prom_collect_seconds', 'Time spent in Prometheus collect')
 
     def __init__( self, hostname, autohost, verbose, configfile ):
         self.host = cycleIterator( [hostname] )
@@ -222,50 +205,21 @@ class wekaCollector():
             for stat, unit in stat_dict.items():
                 # have to create the category keys, so do it with a try: block
                 try:
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R --per-node"
+                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
                 except KeyError:
                     self.wekaIOCommands[category] = {}
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -R --per-node"
+                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
 
-        # one gauge to rule them all... all categories and stats are in the labels
-        self.gaugelist["weka_stats"] = Gauge( 'weka_stats',
-            'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics',
-            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
 
         # set up buckets, [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, inf]
-        buckets=[]
         for i in range(12,12+16):
-            buckets.append( 2 ** i )
+            self.buckets.append( 2 ** i )
 
-        buckets.append( float("inf") )
-        #print( buckets )
-
-        # create histograms for blocksize distribution metrics
-        for category, stat_dict in self.weka_stat_list.items():     # creates duplicates?
-            for stat, unit in stat_dict.items():
-                if unit == "sizes":
-                    #print( "category="+category+", stat="+stat )
-                    if not category in self.histograms:
-                       self.histograms[category] = {}
-
-                       self.histograms[category][stat] = WekaIOHistogram( "weka_blocksize_"+category+"_"+stat, "weka "+category+" "+stat+" blocksizes",
-                           labelnames=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'],
-                           buckets=buckets )   
-
-        # cluster information
-        self.gaugelist["wekaInfo"] = Info( 'weka', "Information about the Weka cluster" )
-
-        # general stats
-        # note gaugelist key is the name of the gauge
-        for name, parms in self.clusterInfo.items():
-            self.gaugelist[name] = Gauge( name, parms[0], parms[1] )
-        for name, parms in self.clusterStats.items():
-            self.gaugelist[name] = Gauge( name, parms[0], parms[1] )
-        for name, parms in self.clusterFsStats.items():
-            self.gaugelist[name] = Gauge( name, parms[0], parms[1] )
+        self.buckets.append( float("inf") )
+        #print( self.buckets )
 
         # gauges to track this program's performance, etc
-        self.cmd_exec_gauge = Gauge('weka_prometheus_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
+        self.cmd_exec_gauge = Gauge('weka_metrics_exporter_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
         #print json.dumps(self.weka_stat_list, indent=2, sort_keys=True)
         # ------------- end of __init__() -------------
 
@@ -276,18 +230,18 @@ class wekaCollector():
             except AttributeError:
                 return yaml.load(f)
         
-    def _parse_sizes_values( self, value_string ):  # returns dict of {iosize:value,iosize:value}
+    def _parse_sizes_values( self, value_string ):  # returns list of tuples of [(iosize,value),(iosize,value),...], and their sum
         # example input: "[32768..65536] 19486, [65536..131072] 1.57837e+06"
-        stat_dict={}
+        gsum = 0
+        stat_list=[]
         values_list = value_string.split( ", " ) # should be "[32768..65536] 19486","[65536..131072] 1.57837e+06"
         for values_str in values_list:      # value_list should be "[32768..65536] 19486" the first time through
             tmp = values_str.split( ".." )  # should be "[32768", "65536] 19486"
             tmp2 = tmp[1].split( "] " )     # should be "65536","19486"
-            stat_dict[str(int(tmp2[0])-1)] = float( tmp2[1] )     # upper bound in weka stats is off by one
+            stat_list.append( ( str(int(tmp2[0])-1), float(tmp2[1]) ) )
+            gsum += float( tmp2[1] )
 
-        return stat_dict
-         
-
+        return stat_list, gsum
 
     def _spawn( self, stat, command, host, category ):     # would schedule() be a better name?
         # spawn a command
@@ -316,274 +270,346 @@ class wekaCollector():
 
 
     # start here
-    @collectinfo_gauge.time()
-    def collectinfo( self ):
-        syslog.syslog( syslog.LOG_INFO, "collectinfo(): collecting data" )
-        thread_runner = simul_threads( len( self.wekaInfo ) )    # have just enough threads to do this work. ??  Maybe should be 1 or 2?
-        # get info from weka cluster
-        for info, command in self.wekaInfo.items():
-            try:
-                thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
-            except:
-                syslog.syslog( syslog.LOG_ERR, "collectinfo(): error scheduling thread wekainfo" )
-                print( "Error contacting cluster" )
-                return      # bail out if we can't talk to the cluster with this first command
+    #
+    # weka_metrics_gather() should run once a minute so it gets fresh stats from the cluster as they update
+    #       populates all datastructures with fresh data
+    #
+    @weka_metrics_gather_gauge.time()
+    def weka_metrics_gather( self ):
+        with self._access_lock:
+            syslog.syslog( syslog.LOG_INFO, "weka_metrics_gather(): collecting weka data" )
+            thread_runner = simul_threads( len( self.wekaInfo ) )    # have just enough threads to do this work. ??  Maybe should be 1 or 2?
 
-        thread_runner.run()     # kick off threads; wait for them to complete
+            # re-initialize wekadata so changes in the cluster don't leave behind strange things (hosts/nodes that no longer exist, etc)
+            self.wekadata = {}
 
-        # reset threading to load balance, if we want to
-        if self.loadbalance:
-            serverlist = []
-            try:
-                for host in self.wekadata["backendHostList"]:
-                    serverlist.append( host["hostname"] )
-                self.servers.reset( serverlist )
-            except KeyError:
-                syslog.syslog( syslog.LOG_ERR, "collectinfo(): No data retrieved from cluster - is the cluster down?" )
-                print( "Error No data retrieved from cluster - is the cluster down?" )
-                return      # bail out if we can't talk to the cluster with this first command
-
-        thread_runner = simul_threads( self.servers.count() )   # up the server count
-
-        # build maps - need this for decoding data, not collecting it.
-        #    do in a try/except block because it can fail if the cluster changes while we're collecting data
-        try:
-            for node in self.wekadata["nodeList"]:
-                self.weka_maps["node-host"][node["node_id"]] = node["hostname"]
-                #self.weka_maps["node-role"][node["node_id"]] = node["roles"][0]
-                self.weka_maps["node-role"][node["node_id"]] = node["roles"]    # note - this is a list
-            for host in self.wekadata["backendHostList"]:
-                self.weka_maps["host-role"][host["hostname"]] = "server"
-            for host in self.wekadata["clientHostList"]:
-                self.weka_maps["host-role"][host["hostname"]] = "client"
-        except:
-            syslog.syslog( syslog.LOG_ERR, "collectinfo(): error building maps. Aborting data collection." )
-            print( "Error building maps!" )
-            return
-
-
-        # schedule a bunch of data collection queries
-        for category, stat_dict in self.wekaIOCommands.items():
-            for stat, command in stat_dict.items():
+            # get info from weka cluster
+            for info, command in self.wekaInfo.items():
                 try:
-                    thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
+                    thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
                 except:
-                    syslog.syslog( syslog.LOG_ERR, "collectinfo(): error scheduling thread wekastat" )
-                    print( "Error spawning thread" )
+                    syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekainfo" )
+                    print( "Error contacting cluster" )
+                    return      # bail out if we can't talk to the cluster with this first command
 
-        thread_runner.run()     # schedule the rest of the threads, wait for them
+            thread_runner.run()     # kick off threads; wait for them to complete
 
-        # ------------- end of collectinfo() -------------
+            # reset threading to load balance, if we want to
+            if self.loadbalance:
+                serverlist = []
+                try:
+                    for host in self.wekadata["backendHostList"]:
+                        # don't try to collect from inactive or otherwise offline hosts
+                        if host["state"] == "ACTIVE":
+                            serverlist.append( host["hostname"] )
+                    self.servers.reset( serverlist )
+                except KeyError:
+                    syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): No data retrieved from cluster - is the cluster down?" )
+                    print( "Error No data retrieved from cluster - is the cluster down?" )
+                    return      # bail out if we can't talk to the cluster with this first command
 
-    @populate_stats_gauge.time()
-    def populate_stats( self ):
-        syslog.syslog( syslog.LOG_INFO, "populate_stats(): populating statistics" )
-        # if the cluster changed during a collection, this will puke, so just go to the next sample.
-        #   One or two missing samples won't hurt
+            thread_runner = simul_threads( self.servers.count() )   # up the server count
 
-        try:
-            # determine Cloud Status 
-            if self.wekadata["clusterinfo"]["cloud"]["healthy"]: cloudStatus="Healthy"       # must be enabled to be healthy 
-            elif self.wekadata["clusterinfo"]["cloud"]["enabled"]:
-                cloudStatus="Unhealthy"     # enabled, but unhealthy
-            else:
-                cloudStatus="Disabled"      # disabled, healthy is meaningless
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing cloud status" )
-            print( "Error processing Cloud Status!" )
+            # build maps - need this for decoding data, not collecting it.
+            #    do in a try/except block because it can fail if the cluster changes while we're collecting data
 
-        try:
-            # Basic info
-            wekacluster = { "cluster": self.wekadata["clusterinfo"]["name"], "version": self.wekadata["clusterinfo"]["release"], 
-                    "cloud_status": cloudStatus, "license_status":self.wekadata["clusterinfo"]["licensing"]["mode"], 
-                    "io_status": self.wekadata["clusterinfo"]["io_status"], "link_layer": self.wekadata["clusterinfo"]["net"]["link_layer"] }
+            # clear old maps, if any - if nodes come/go this can get funky with old data, so re-create it every time
+            self.weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }       # initial state of maps
 
-            self.gaugelist["wekaInfo"].info( wekacluster )
-            syslog.syslog( syslog.LOG_INFO, "collectinfo(): cluster name: " + self.wekadata["clusterinfo"]["name"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error cluster info - aborting populate" )
-            print( "Error processing Basic info!" )
-            return
+            # populate maps
+            try:
+                for node in self.wekadata["nodeList"]:
+                    self.weka_maps["node-host"][node["node_id"]] = node["hostname"]
+                    self.weka_maps["node-role"][node["node_id"]] = node["roles"]    # note - this is a list
+                for host in self.wekadata["backendHostList"]:
+                    self.weka_maps["host-role"][host["hostname"]] = "server"
+                for host in self.wekadata["clientHostList"]:
+                    self.weka_maps["host-role"][host["hostname"]] = "client"
+            except:
+                syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error building maps. Aborting data collection." )
+                print( "Error building maps!" )
+                return
 
-        try:
-            # Weka status indicator
-            if (self.wekadata["clusterinfo"]["buckets"]["active"] == self.wekadata["clusterinfo"]["buckets"]["total"] and
-                   self.wekadata["clusterinfo"]["drives"]["active"] == self.wekadata["clusterinfo"]["drives"]["total"] and
-                   self.wekadata["clusterinfo"]["io_nodes"]["active"] == self.wekadata["clusterinfo"]["io_nodes"]["total"] and
-                   self.wekadata["clusterinfo"]["hosts"]["backends"]["active"] == self.wekadata["clusterinfo"]["hosts"]["backends"]["total"]):
-               WekaClusterStatus="OK"
-            else:
-               WekaClusterStatus="WARN"
-                    
-            self.gaugelist["weka_status"].labels( self.wekadata["clusterinfo"]["name"], WekaClusterStatus ).set( 0 ) 
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing weka status" )
-            print( "Error processing weka status indicator!" )
 
-        try:
-            # Uptime
-            # not sure why, but sometimes this would fail... trim off the microseconds, because we really don't care 
-            cluster_time = self._trim_time( self.wekadata["clusterinfo"]["time"]["cluster_time"] )
-            start_time = self._trim_time( self.wekadata["clusterinfo"]["io_status_changed_time"] )
-            now_obj = datetime.datetime.strptime( cluster_time, "%Y-%m-%dT%H:%M:%S" )
-            dt_obj = datetime.datetime.strptime( start_time, "%Y-%m-%dT%H:%M:%S" )
-            uptime = now_obj - dt_obj
-            self.gaugelist["weka_uptime"].labels( self.wekadata["clusterinfo"]["name"] ).set( uptime.total_seconds() )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error calculating runtime" )
-            print( "Error processing uptime!" )
-
-        try:
-            # performance overview summary
-            # I suppose we could change the gauge names to match the keys, ie: "num_ops" so we could do this in a loop
-            #       e: weka_overview_activity_num_ops instead of weka_overview_activity_ops
-            self.gaugelist['weka_overview_activity_ops'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["num_ops"] )
-            self.gaugelist['weka_overview_activity_read_iops'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["num_reads"] )
-            self.gaugelist['weka_overview_activity_read_bytespersec'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["sum_bytes_read"] )
-            self.gaugelist['weka_overview_activity_write_iops'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["num_writes"] )
-            self.gaugelist['weka_overview_activity_write_bytespersec'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["sum_bytes_written"] )
-            self.gaugelist['weka_overview_activity_object_download_bytespersec'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["obs_download_bytes_per_second"] )
-            self.gaugelist['weka_overview_activity_object_upload_bytespersec'].labels( 
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["activity"]["obs_upload_bytes_per_second"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing performance overview" )
-            print( "Error processing performance overview!" )
-
-        try:
-            # server overview
-            self.gaugelist["weka_num_servers_active"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["backends"]["active"] )
-            self.gaugelist["weka_num_servers_total"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["backends"]["total"] )
-            self.gaugelist["weka_num_clients_active"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["clients"]["active"] )
-            self.gaugelist["weka_num_clients_total"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["hosts"]["clients"]["total"] )
-            self.gaugelist["weka_num_drives_active"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["drives"]["active"] )
-            self.gaugelist["weka_num_drives_total"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set( self.wekadata["clusterinfo"]["drives"]["total"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing server overview" )
-            print( "Error processing server overview!" )
-
-        try:
-            # capacity overview
-            self.gaugelist["weka_host_spares"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set(
-                    self.wekadata["clusterinfo"]["hot_spare"] )
-            self.gaugelist["weka_host_spares_bytes"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set(
-                    self.wekadata["clusterinfo"]["capacity"]["hot_spare_bytes"] )
-            self.gaugelist["weka_drive_storage_total_bytes"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set(
-                    self.wekadata["clusterinfo"]["capacity"]["total_bytes"] )
-            self.gaugelist["weka_drive_storage_unprovisioned_bytes"].labels(
-                    self.wekadata["clusterinfo"]["name"] ).set(
-                    self.wekadata["clusterinfo"]["capacity"]["unprovisioned_bytes"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing capacity overview" )
-            print( "Error processing capacity overview!" )
-
-        try:
-            # protection status
-            rebuildStatus = self.wekadata["clusterinfo"]["rebuild"]
-            protectionStateList = rebuildStatus["protectionState"]
-            numStates = len( protectionStateList )  # 3 (0,1,2) for 2 parity), or 5 (0,1,2,3,4 for 4 parity)
-            for index in range( numStates ):
-                self.gaugelist["weka_protection"].labels( self.wekadata["clusterinfo"]["name"],
-                        protectionStateList[index]["numFailures"] ).set( protectionStateList[index]["percent"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing protection status" )
-            print( "Error processing protection status!" )
-
-        try:
-            # Filesystem stats
-            for fs in self.wekadata["fs_stat"]:
-                self.gaugelist['weka_fs_utilization_percent'].labels(
-                        self.wekadata["clusterinfo"]["name"], 
-                        fs["name"] ).set( 
-                        float( fs["used_total"] ) / float( fs["available_total"] ) * 100 )
-                self.gaugelist['weka_fs_size_bytes'].labels(
-                        self.wekadata["clusterinfo"]["name"], 
-                        fs["name"] ).set( 
-                        fs["available_total"] )
-                self.gaugelist['weka_fs_used_bytes'].labels(
-                        self.wekadata["clusterinfo"]["name"], 
-                        fs["name"] ).set( 
-                        fs["used_total"] )
-        except:
-            syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing filesystem stats" )
-            print( "Error processing filesystem stats!" )
-
-        # get all the IO stats...
-        #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
-        #
-        # yes, I know it's convoluted... it was hard to write, so it *should* be hard to read. ;)
-        for category, stat_dict in self.weka_stat_list.items():
-            for stat, nodelist in self.wekadata[category].items():
-                unit = stat_dict[stat]
-                for node in nodelist:
+            # schedule a bunch of data collection queries
+            for category, stat_dict in self.wekaIOCommands.items():
+                for stat, command in stat_dict.items():
                     try:
-                        hostname = self.weka_maps["node-host"][node["node"]]    # save this because the syntax is gnarly
-                        role_list = self.weka_maps["node-role"][node["node"]]
+                        thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
                     except:
-                        syslog.syslog( syslog.LOG_ERR, "populate_stats(): error in maps" )
-                        print( "Error in maps" )
-                        continue            # or return?
+                        syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekastat" )
+                        print( "Error spawning thread" )
 
-                    for role in role_list:
-                        if unit != "sizes":
-                            try:
-                                self.gaugelist["weka_stats"].labels( 
-                                    self.wekadata["clusterinfo"]["name"], 
-                                    hostname,
-                                    self.weka_maps["host-role"][hostname], 
-                                    node["node"], 
-                                    role,
-                                    category,
-                                    stat,
-                                    unit ).set( node["stat_value"] )
-                            except:
-                                track = traceback.format_exc()
-                                print(track)
-                                syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
-                                print( "Error processing io stats!" )
-                        else:
-                            try:
-                                value_dict = self._parse_sizes_values( node["stat_value"] )  # Turn the stat_value into a dict
-                                for iosize, value in value_dict.items():
-                                    #print( "processing \""+node["stat_value"]+"\", iosize="+str(iosize)+", value="+str(value) )
-                                    self.histograms[category][stat].labels(   
-                                        self.wekadata["clusterinfo"]["name"], 
-                                        hostname,
-                                        self.weka_maps["host-role"][hostname], 
-                                        node["node"], 
-                                        role,
-                                        category,
-                                        stat,
-                                        unit ).multi_observe( iosize, value )
-                            except:
-                                track = traceback.format_exc()
-                                print(track)
-                                syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io sizes" )
-                                print( "Error processing io sizes!" )
+            thread_runner.run()     # schedule the rest of the threads, wait for them
 
-        #except:
-        #    syslog.syslog( syslog.LOG_ERR, "populate_stats(): error processing io stats" )
-        #    print( "Error processing io stats!" )
+        # ------------- end of weka_metrics_gather() -------------
 
-        # ------------- end of populate_stats() -------------
+    @prom_collect_gauge.time()
+    def prom_collect( self ):
+        with self._access_lock:
+            syslog.syslog( syslog.LOG_INFO, "prom_collect(): collecting statistics" )
+
+            # if the cluster changed during a collection, this may puke, so just go to the next sample.
+            #   One or two missing samples won't hurt
+
+            # have we had our first collection yet?
+            if self.wekadata == {}:
+                return
+
+            try:
+                # determine Cloud Status 
+                if self.wekadata["clusterinfo"]["cloud"]["healthy"]: cloudStatus="Healthy"       # must be enabled to be healthy 
+                elif self.wekadata["clusterinfo"]["cloud"]["enabled"]:
+                    cloudStatus="Unhealthy"     # enabled, but unhealthy
+                else:
+                    cloudStatus="Disabled"      # disabled, healthy is meaningless
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing cloud status" )
+                print( "Error processing Cloud Status!" )
+
+            # set the weka_info Gauge
+            try:
+                # Basic info
+                wekacluster = { "cluster": self.wekadata["clusterinfo"]["name"], "version": self.wekadata["clusterinfo"]["release"], 
+                        "cloud_status": cloudStatus, "license_status":self.wekadata["clusterinfo"]["licensing"]["mode"], 
+                        "io_status": self.wekadata["clusterinfo"]["io_status"], "link_layer": self.wekadata["clusterinfo"]["net"]["link_layer"] }
+
+                wekainfo = InfoMetricFamily( 'weka', "Information about the Weka cluster", value=wekacluster )
+
+                syslog.syslog( syslog.LOG_INFO, "weka_metrics_gather(): cluster name: " + self.wekadata["clusterinfo"]["name"] )
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error cluster info - aborting populate" )
+                print( "Error processing Basic info!" )
+                return
+
+            yield wekainfo
+
+            try:
+                # Weka status indicator
+                if (self.wekadata["clusterinfo"]["buckets"]["active"] == self.wekadata["clusterinfo"]["buckets"]["total"] and
+                       self.wekadata["clusterinfo"]["drives"]["active"] == self.wekadata["clusterinfo"]["drives"]["total"] and
+                       self.wekadata["clusterinfo"]["io_nodes"]["active"] == self.wekadata["clusterinfo"]["io_nodes"]["total"] and
+                       self.wekadata["clusterinfo"]["hosts"]["backends"]["active"] == self.wekadata["clusterinfo"]["hosts"]["backends"]["total"]):
+                   WekaClusterStatus="OK"
+                else:
+                   WekaClusterStatus="WARN"
+                        
+                wekstatus = GaugeMetricFamily( 'weka_status', "Weka cluster status (OK, etc)", labels=["cluster","status"] )
+                wekstatus.add_metric([self.wekadata["clusterinfo"]["name"], WekaClusterStatus], 0)
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing weka status" )
+                print( "Error processing weka status indicator!" )
+
+            yield wekstatus
+
+            try:
+                # Uptime
+                # not sure why, but sometimes this would fail... trim off the microseconds, because we really don't care 
+                cluster_time = self._trim_time( self.wekadata["clusterinfo"]["time"]["cluster_time"] )
+                start_time = self._trim_time( self.wekadata["clusterinfo"]["io_status_changed_time"] )
+                now_obj = datetime.datetime.strptime( cluster_time, "%Y-%m-%dT%H:%M:%S" )
+                dt_obj = datetime.datetime.strptime( start_time, "%Y-%m-%dT%H:%M:%S" )
+                uptime = now_obj - dt_obj
+                wekauptime = GaugeMetricFamily( 'weka_uptime', "Weka cluster uptime", labels=["cluster"] )
+                wekauptime.add_metric([self.wekadata["clusterinfo"]["name"]], uptime.total_seconds())
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error calculating runtime" )
+                print( "Error processing uptime!" )
+
+            yield wekauptime
+
+            try:
+                # performance overview summary
+                # I suppose we could change the gauge names to match the keys, ie: "num_ops" so we could do this in a loop
+                #       e: weka_overview_activity_num_ops instead of weka_overview_activity_ops
+                for name, parms in self.clusterStats.items():
+                    cluster_stat = GaugeMetricFamily( name, parms[0], labels=parms[1] )
+                    cluster_stat.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["activity"][parms[2]] )
+                    yield cluster_stat
+
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing performance overview" )
+                print( "Error processing performance overview!" )
+
+            try:
+
+                    cluster_info = GaugeMetricFamily( 'weka_host_spares', 'Weka cluster # of hot spares', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["hot_spare"] )
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_host_spares_bytes', 'Weka capacity of hot spares', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["capacity"]["hot_spare_bytes"] )
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_drive_storage_total_bytes', 'Weka total drive capacity', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["capacity"]["total_bytes"] )
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_drive_storage_unprovisioned_bytes', 'Weka unprovisioned drive capacity', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["capacity"]["unprovisioned_bytes"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_servers_active', 'Number of active weka servers', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["hosts"]["backends"]["active"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_servers_total', 'Total number of weka servers', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["hosts"]["backends"]["total"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_clients_active', 'Number of active weka clients', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["hosts"]["clients"]["active"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_clients_total', 'Total number of weka clients', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["hosts"]["clients"]["total"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_drives_active', 'Number of active weka drives', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["drives"]["active"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_num_drives_total', 'Total number of weka drives', labels=["cluster"] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"]], self.wekadata["clusterinfo"]["drives"]["total"])
+                    yield cluster_info
+
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing server overview" )
+                print( "Error processing server overview!" )
+
+            try:
+                # protection status
+                rebuildStatus = self.wekadata["clusterinfo"]["rebuild"]
+                protectionStateList = rebuildStatus["protectionState"]
+                numStates = len( protectionStateList )  # 3 (0,1,2) for 2 parity), or 5 (0,1,2,3,4 for 4 parity)
+
+                cluster_info = GaugeMetricFamily( 'weka_protection', 'Weka Data Protection Status', labels=["cluster",'numFailures'] )
+                for index in range( numStates ):
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], str(protectionStateList[index]["numFailures"])], protectionStateList[index]["percent"])
+                yield cluster_info
+
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing protection status" )
+                print( "Error processing protection status!" )
+
+            try:
+                # Filesystem stats
+                for fs in self.wekadata["fs_stat"]:
+                    cluster_info = GaugeMetricFamily( 'weka_fs_utilization_percent', 'Filesystem % used', labels=["cluster",'fsname'] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], fs["name"]], float( fs["used_total"] ) / float( fs["available_total"] ) * 100)
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_fs_size_bytes', 'Filesystem size', labels=["cluster",'name'] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], fs["name"]], fs["available_total"])
+                    yield cluster_info
+
+                    cluster_info = GaugeMetricFamily( 'weka_fs_used_bytes', 'Filesystem used capacity',
+                            labels=["cluster",'name'] )
+                    cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], fs["name"]], fs["used_total"])
+                    yield cluster_info
+
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing filesystem stats" )
+                print( "Error processing filesystem stats!" )
+
+
+            # general metrics Gauge
+            weka_stats_gauge = GaugeMetricFamily('weka_stats', 'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics',
+                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
+
+            # histogram of io blocksizes - for all histogram metrics
+            weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize", "weka blocksize distribution histogram", 
+                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
+
+            # get all the IO stats...
+            #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
+            #
+            # yes, I know it's convoluted... it was hard to write, so it *should* be hard to read. ;)
+            for category, stat_dict in self.weka_stat_list.items():
+                for stat, nodelist in self.wekadata[category].items():
+                    unit = stat_dict[stat]
+                    for node in nodelist:
+                        try:
+                            hostname = self.weka_maps["node-host"][node["node"]]    # save this because the syntax is gnarly
+                            role_list = self.weka_maps["node-role"][node["node"]]
+                        except:
+                            track = traceback.format_exc()
+                            print(track)
+                            syslog.syslog( syslog.LOG_ERR, "prom_collect(): error in maps" )
+                            print( "Error in maps" )
+                            continue            # or return?
+
+                        for role in role_list:
+
+                            labelvalues = [ 
+                                self.wekadata["clusterinfo"]["name"], 
+                                hostname,
+                                self.weka_maps["host-role"][hostname], 
+                                node["node"], 
+                                role,
+                                category,
+                                stat,
+                                unit ]
+
+                            if unit != "sizes":
+                                try:
+                                    weka_stats_gauge.add_metric(labelvalues, node["stat_value"])
+                                except:
+                                    track = traceback.format_exc()
+                                    print(track)
+                                    syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing io stats" )
+                                    print( "Error processing io stats!" )
+                            else:   
+                                #weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize_"+category+"_"+stat, "weka "+category+" "+stat+" blocksizes", # should this be above?
+                                #    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
+
+                                try:
+                                    value_dict, gsum = self._parse_sizes_values( node["stat_value"] )  # Turn the stat_value into a dict
+                                    #print( value_dict )
+                                    #print( gsum )
+                                    weka_io_histogram.add_metric( labels=labelvalues, buckets=value_dict, gsum_value=gsum )
+                                except:
+                                    track = traceback.format_exc()
+                                    print(track)
+                                    syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing io sizes" )
+                                    print( "Error processing io sizes!" )
+
+            yield weka_stats_gauge
+            yield weka_io_histogram
+
+        # ------------- end of prom_collect() -------------
 
     def _trim_time( self, time_string ):
         tmp = time_string.split( '.' )
         return tmp[0]
+
+# our prometheus collector
+class CustomCollector(object):
+    weka = None
+    def __init__(self, weka):
+        self.weka = weka
+        pass
+
+    def collect(self):
+        if self.weka.verbose:
+            print( "prom collecting" )
+        return self.weka.prom_collect()
 
 # classless functions
 def sigterm_handler(signal, frame):
@@ -631,17 +657,23 @@ if __name__ == '__main__':
     # debugging
     #all_objects = muppy.get_objects()
 
+    # sleep to the top of the minute to ensure our first data collection is valid
+    now = time.time()
+    secs_to_next_min = 60 - (now % 60)
+    print( "sleeping for " + str(secs_to_next_min +1) + "secs before first data collection" )
+    time.sleep(secs_to_next_min +1)
+
+    # perform first data collection before we open web page
+    wekacollect.weka_metrics_gather()
+
     #
     # Start up the server to expose the metrics.
     #
     start_http_server(int(args.port))
+
+    REGISTRY.register( CustomCollector(wekacollect) )
     # Generate some requests.
     while True:
-        # collect the data (ie: run weka commands)
-        wekacollect.collectinfo()
-        
-        # populate/update the gauge objects with the data
-        wekacollect.populate_stats()
 
         # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
         now = time.time()
@@ -652,7 +684,13 @@ if __name__ == '__main__':
         #summary.print_(sum1)
 
         # sleep until next weka stats update, so we don't waste cpu
+        if args.verbose:
+            print( "sleeping for " + str(secs_to_next_min +1) + "secs" )
         time.sleep(secs_to_next_min +1)
 
+        # populate/update the gauge objects with the data
+        if args.verbose:
+            print( "collecting weka info" )
+        wekacollect.weka_metrics_gather()
 
 
