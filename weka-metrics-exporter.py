@@ -256,17 +256,16 @@ class wekaCollector():
         with self.cmd_exec_gauge.labels(gaugekey).time() as timer:
             try:
                 if category == None: ### think on this
-                    self.wekadata[stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                    self.wekadata_new[stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
                 else:
                     try:
-                        self.wekadata[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                        self.wekadata_new[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
                     except KeyError:
-                        self.wekadata[category] = {}
-                        self.wekadata[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                        self.wekadata_new[category] = {}
+                        self.wekadata_new[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
             except:
                 syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command )
                 print( "Error spawning command " + full_command )
-                #self.wekadata[stat] = []    # hmm... not sure we want to do this
 
 
     # start here
@@ -276,71 +275,73 @@ class wekaCollector():
     #
     @weka_metrics_gather_gauge.time()
     def weka_metrics_gather( self ):
-        with self._access_lock:
-            syslog.syslog( syslog.LOG_INFO, "weka_metrics_gather(): collecting weka data" )
-            thread_runner = simul_threads( len( self.wekaInfo ) )    # have just enough threads to do this work. ??  Maybe should be 1 or 2?
+        syslog.syslog( syslog.LOG_INFO, "weka_metrics_gather(): collecting weka data" )
+        thread_runner = simul_threads( len( self.wekaInfo ) )    # have just enough threads to do this work. ??  Maybe should be 1 or 2?
 
-            # re-initialize wekadata so changes in the cluster don't leave behind strange things (hosts/nodes that no longer exist, etc)
-            self.wekadata = {}
+        # re-initialize wekadata so changes in the cluster don't leave behind strange things (hosts/nodes that no longer exist, etc)
+        self.wekadata_new = {}
 
-            # get info from weka cluster
-            for info, command in self.wekaInfo.items():
-                try:
-                    thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
-                except:
-                    syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekainfo" )
-                    print( "Error contacting cluster" )
-                    return      # bail out if we can't talk to the cluster with this first command
-
-            thread_runner.run()     # kick off threads; wait for them to complete
-
-            # reset threading to load balance, if we want to
-            if self.loadbalance:
-                serverlist = []
-                try:
-                    for host in self.wekadata["backendHostList"]:
-                        # don't try to collect from inactive or otherwise offline hosts
-                        if host["state"] == "ACTIVE":
-                            serverlist.append( host["hostname"] )
-                    self.servers.reset( serverlist )
-                except KeyError:
-                    syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): No data retrieved from cluster - is the cluster down?" )
-                    print( "Error No data retrieved from cluster - is the cluster down?" )
-                    return      # bail out if we can't talk to the cluster with this first command
-
-            thread_runner = simul_threads( self.servers.count() )   # up the server count
-
-            # build maps - need this for decoding data, not collecting it.
-            #    do in a try/except block because it can fail if the cluster changes while we're collecting data
-
-            # clear old maps, if any - if nodes come/go this can get funky with old data, so re-create it every time
-            self.weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }       # initial state of maps
-
-            # populate maps
+        # get info from weka cluster
+        for info, command in self.wekaInfo.items():
             try:
-                for node in self.wekadata["nodeList"]:
-                    self.weka_maps["node-host"][node["node_id"]] = node["hostname"]
-                    self.weka_maps["node-role"][node["node_id"]] = node["roles"]    # note - this is a list
-                for host in self.wekadata["backendHostList"]:
-                    self.weka_maps["host-role"][host["hostname"]] = "server"
-                for host in self.wekadata["clientHostList"]:
-                    self.weka_maps["host-role"][host["hostname"]] = "client"
+                thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
             except:
-                syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error building maps. Aborting data collection." )
-                print( "Error building maps!" )
-                return
+                syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekainfo" )
+                print( "Error contacting cluster" )
+                return      # bail out if we can't talk to the cluster with this first command
+
+        thread_runner.run()     # kick off threads; wait for them to complete
+
+        # reset threading to load balance, if we want to
+        if self.loadbalance:
+            serverlist = []
+            try:
+                for host in self.wekadata_new["backendHostList"]:
+                    # don't try to collect from inactive or otherwise offline hosts
+                    if host["state"] == "ACTIVE":
+                        serverlist.append( host["hostname"] )
+                self.servers.reset( serverlist )
+            except KeyError:
+                syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): No data retrieved from cluster - is the cluster down?" )
+                print( "Error No data retrieved from cluster - is the cluster down?" )
+                return      # bail out if we can't talk to the cluster with this first command
+
+        thread_runner = simul_threads( self.servers.count() )   # up the server count
+
+        # build maps - need this for decoding data, not collecting it.
+        #    do in a try/except block because it can fail if the cluster changes while we're collecting data
+
+        # clear old maps, if any - if nodes come/go this can get funky with old data, so re-create it every time
+        self.weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }       # initial state of maps
+
+        # populate maps
+        try:
+            for node in self.wekadata_new["nodeList"]:
+                self.weka_maps["node-host"][node["node_id"]] = node["hostname"]
+                self.weka_maps["node-role"][node["node_id"]] = node["roles"]    # note - this is a list
+            for host in self.wekadata_new["backendHostList"]:
+                self.weka_maps["host-role"][host["hostname"]] = "server"
+            for host in self.wekadata_new["clientHostList"]:
+                self.weka_maps["host-role"][host["hostname"]] = "client"
+        except:
+            syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error building maps. Aborting data collection." )
+            print( "Error building maps!" )
+            return
 
 
-            # schedule a bunch of data collection queries
-            for category, stat_dict in self.wekaIOCommands.items():
-                for stat, command in stat_dict.items():
-                    try:
-                        thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
-                    except:
-                        syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekastat" )
-                        print( "Error spawning thread" )
+        # schedule a bunch of data collection queries
+        for category, stat_dict in self.wekaIOCommands.items():
+            for stat, command in stat_dict.items():
+                try:
+                    thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
+                except:
+                    syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekastat" )
+                    print( "Error spawning thread" )
 
-            thread_runner.run()     # schedule the rest of the threads, wait for them
+        thread_runner.run()     # schedule the rest of the threads, wait for them
+
+        with self._access_lock:
+            self.wekadata = self.wekadata_new
 
         # ------------- end of weka_metrics_gather() -------------
 
