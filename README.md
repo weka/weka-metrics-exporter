@@ -10,8 +10,11 @@ Metrics exporter for WekaFS. Gathers metrics and statistics from a Weka Cluster 
 
 ## New in v2.0
 The host specified with the -H parameter may now be a comma-separated list of hosts.  ie: weka1,weka2,weka3   
+
 This will prevent the exporter from failing to start up if the host is down, similar to the way stateless client mounts work.
+
 Fixed an error where old stats that had 0 values were still being reported with their last known value by prometheus
+
 Performance improvements
 
 ## Metrics Exported
