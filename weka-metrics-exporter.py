@@ -108,28 +108,39 @@ class simul_threads():
 # used to implement --autohost
 class cycleIterator():
     def __init__( self, list ):
+        self._lock = Lock() # make it re-entrant (thread-safe)
         self.list = list
         self.current = 0
 
     # return next item in the list
     def next( self ):
-        item = self.list[self.current]
-        self.current += 1
-        if self.current >= len( self.list ):    # cycle back to beginning
-            self.current = 0
-        return item
+        with self._lock:
+            if len( self.list ) == 0:
+                return None # nothing in the list
+            item = self.list[self.current]
+            self.current += 1
+            if self.current >= len( self.list ):    # cycle back to beginning
+                self.current = 0
+            return item
 
     # reset the list to something new
     def reset( self, list ):
-        self.list = list
-        if self.current >= len( self.list ):    # handle case where a node may have left the cluster
-            self.current = 0
+        with self._lock:
+            self.list = list
+            if self.current >= len( self.list ):    # handle case where a node may have left the cluster
+                self.current = 0
 
     def count( self ):
-        return len( self.list )
+        with self._lock:
+            return len( self.list )
+
+    def remove( self, item ):
+        with self._lock:
+            self.list.remove( item )
 
     def __str__( self ):
-        return "list=" + str( self.list ) + ", current=" + str(self.current)
+        with self._lock:
+            return "list=" + str( self.list ) + ", current=" + str(self.current)
 
 # ---------------- end of cycleIterator definition ------------
 
@@ -177,7 +188,7 @@ class wekaCollector():
     singlethreaded = False  # default
     loadbalance = True      # default
     verbose = False         # default
-    servers = None
+    servers = None          # current list of servers to execute commands on
     host = None
     wekadata = {}
     buckets = []
@@ -191,8 +202,10 @@ class wekaCollector():
     prom_collect_gauge = Gauge('weka_metrics_exporter_prom_collect_seconds', 'Time spent in Prometheus collect')
 
     def __init__( self, hostname, autohost, verbose, configfile ):
-        self.host = cycleIterator( [hostname] )
-        self.servers = cycleIterator( [hostname] )
+        hostlist = hostname.split(",")  # takes a comma-separated list of hosts
+
+        self.host = cycleIterator( hostlist )
+        self.servers = cycleIterator( hostlist )
         self.loadbalance = autohost
         self.verbose = verbose
 
@@ -243,9 +256,55 @@ class wekaCollector():
 
         return stat_list, gsum
 
+    # run a command, expecting JSON output. return the returncode and stdout as a dict  int,dict
+    def _run_json( self, command_string ):
+        # prepare command line - change string into list
+        command = command_string.split( " " )
+
+        try:
+            p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE )
+            outp, errp = p.communicate()
+            output = outp.decode("utf-8")
+            returncode = p.returncode
+
+        except:     # all other errors
+            track = traceback.format_exc()
+            print(track)
+            syslog.syslog( syslog.LOG_ERR, "_run_json(): unusual error running: " + command_string )
+            print( "_run_json(): unusual error running: " + command_string )
+            return -1, {}
+
+        #print( "DEBUG: return code from '" + command_string + "' was " + str( returncode ) )
+        #print( command )
+        #print( "DEBUG: output from '" + command_string + "' was " + output )
+
+        if returncode == 0:
+            return returncode, json.loads( output )
+        else:
+            #print( "_run_json: command returned '" + errp.decode("utf-8") + "'" )
+            return -1, {}
+
+
+    # internal routine called from only a couple of places
+    # executes a weka command and saves output JSON
     def _spawn( self, stat, command, host, category ):     # would schedule() be a better name?
-        # spawn a command
-        full_command = "weka " + command + " -J -H " + host
+        # host is a cycleIterator object with a list of hosts in it
+        hostname = host.next()      # get the name of the host we should execute the command on
+
+        # no hosts?   Since we can remove hosts that don't respond, we can run out of them
+        # this is essentially a terminal error for the program.  They didn't give us any valid hosts,
+        # or we can't talk to them (network issues and such)
+        if( hostname == None ):
+            track = traceback.format_exc()
+            print(track)
+            syslog.syslog( syslog.LOG_ERR, "_spawn(): no hosts to run on: " + command )
+            print( "_spawn(): no hosts to run on: " + command )
+            sys.exit( 1 )   # this is actually really bad.
+
+        # build the command
+        full_command = "/usr/bin/weka " + command + " -J -H " + hostname
+
+        # this is so we can track command execution time by command
         if category == None:
             gaugekey = stat
         else:
@@ -253,19 +312,32 @@ class wekaCollector():
 
         if self.verbose:
             print( "executing: " + full_command )
-        with self.cmd_exec_gauge.labels(gaugekey).time() as timer:
+        with self.cmd_exec_gauge.labels(gaugekey).time() as timer:  # this tracks execution time
             try:
-                if category == None: ### think on this
-                    self.wekadata_new[stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                if category == None: 
+                    returncode, self.wekadata_new[stat] = self._run_json( full_command )
                 else:
+                    # check if the category has been initialized
                     try:
-                        self.wekadata_new[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                        junk = self.wekadata_new[category]
                     except KeyError:
                         self.wekadata_new[category] = {}
-                        self.wekadata_new[category][stat] = json.loads( subprocess.check_output( full_command, shell=True ) )
+                    returncode, self.wekadata_new[category][stat] = self._run_json( full_command )
+
             except:
+                track = traceback.format_exc()
+                print(track)
                 syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command )
                 print( "Error spawning command " + full_command )
+
+        # ok, command crapped out.  Let's not use that host again, and give the command a recursive try
+        # if all are bad, it'll eventually run out of hosts and fail above
+        if returncode != 0:
+            syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command + ": Removing host " + hostname + " from inventory" )
+            print( "_spawn(): error spawning command " + full_command + ": Removing host " + hostname + " from inventory" )
+            host.remove( hostname )
+            self._spawn( stat, command, host, category )
+
 
 
     # start here
@@ -284,7 +356,7 @@ class wekaCollector():
         # get info from weka cluster
         for info, command in self.wekaInfo.items():
             try:
-                thread_runner.new( self._spawn, (info, command, self.host.next(), None ) )
+                thread_runner.new( self._spawn, (info, command, self.host, None ) )
             except:
                 syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekainfo" )
                 print( "Error contacting cluster" )
@@ -333,7 +405,7 @@ class wekaCollector():
         for category, stat_dict in self.wekaIOCommands.items():
             for stat, command in stat_dict.items():
                 try:
-                    thread_runner.new( self._spawn, (stat, command, self.servers.next(), category) ) 
+                    thread_runner.new( self._spawn, (stat, command, self.servers, category) ) 
                 except:
                     syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error scheduling thread wekastat" )
                     print( "Error spawning thread" )
@@ -639,7 +711,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
     parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
     parser.add_argument("-p", "--port", dest='port', default="8001", help="TCP port number to listen on")
-    parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host (hostname/ip) to collect stats from")
+    parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host(s) (hostname/ip) to collect stats from. May be a comma-separated list")
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbose", dest='verbose', default=False, action="store_true", help="Enable verbose output" )
     args = parser.parse_args()
@@ -661,8 +733,11 @@ if __name__ == '__main__':
     # sleep to the top of the minute to ensure our first data collection is valid
     now = time.time()
     secs_to_next_min = 60 - (now % 60)
-    print( "sleeping for " + str(secs_to_next_min +1) + "secs before first data collection" )
-    time.sleep(secs_to_next_min +1)
+    
+    # make sure we can collect before the top of the minute... not good to cross the minute boundry
+    if secs_to_next_min < 15:
+        print( "sleeping for " + str(secs_to_next_min +1) + "secs before first data collection" )
+        time.sleep(secs_to_next_min +1)
 
     # perform first data collection before we open web page
     wekacollect.weka_metrics_gather()
