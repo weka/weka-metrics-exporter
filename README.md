@@ -8,6 +8,12 @@ Metrics exporter for WekaFS. Gathers metrics and statistics from a Weka Cluster 
 2. Make sure you have Python 3.5+ and `pip` installed on you machine.
 3. Install package dependencies: `pip install -r requirements.txt`.
 
+## New in v2.0
+The host specified with the -H parameter may now be a comma-separated list of hosts.  ie: weka1,weka2,weka3   
+This will prevent the exporter from failing to start up if the host is down, similar to the way stateless client mounts work.
+Fixed an error where old stats that had 0 values were still being reported with their last known value by prometheus
+Performance improvements
+
 ## Metrics Exported
 
 1. Edit the weka-metrics-exporter.yml file. All the metrics that can be collected are defined there. Note that the default contents are sufficient to populate the example dashboards. **Add ONLY what you need**. It does generate load on the cluster to collects these stats.
