@@ -75,4 +75,6 @@ docker run -d -p 8001:8001 --mount type=bind,source=/etc/hosts,target=/etc/hosts
 
 Comments, issues, etc can be reported in the repository's issues.
 
+Note: This is provided via the GPLv3 license agreement (text in LICENSE.md).  Using/copying this code implies you accept the agreement.
+
 Maintained by vince@weka.io
