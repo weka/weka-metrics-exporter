@@ -4,21 +4,12 @@
 # Vince Fleming
 # vince@weka.io
 #
-# Note - this is an EXAMPLE of how to gather statistics about Weka, and it totally unsupported, dude.
-# However, feel free to contact Vince with feedback, questions, and enhancement requests; he may be in the mood to help
+# Note - this is an EXAMPLE of how to gather statistics from Weka, and is NOT an offically supported WekaIO product.
 #
-# This script assumes Python 2.7, but should work with newer versions of Python
+
 #
-# Installation instructions:
-#   install pip (yum -y install python2-pip)
+# Please refer to the README.md file in the github repository for installation instructions and requirements.
 #
-#   install prometheus_client (pip install prometheus_client)
-#   install pyyaml (pip install pyyaml) - note aws does not always have a new enough version
-#
-#   run this script.  You *should* start it via a service/systemd (ie: systemctl)
-#       maybe someday we'll include the config files for systemd...
-#
-#   Add this server:8000 to Prometheus's .yml configuration
 
 import prometheus_client
 from prometheus_client import start_http_server, Gauge, Info, Summary, Counter, Histogram, REGISTRY
