@@ -4,8 +4,6 @@
 # Vince Fleming
 # vince@weka.io
 #
-# Note - this is an EXAMPLE of how to gather statistics from Weka, and is NOT an offically supported WekaIO product.
-#
 
 #
 # Please refer to the README.md file in the github repository for installation instructions and requirements.
@@ -460,27 +458,6 @@ class wekaCollector():
                 return
 
             yield wekainfo
-
-            #try:
-            #    # Weka status indicator
-            #    if (self.wekadata["clusterinfo"]["buckets"]["active"] == self.wekadata["clusterinfo"]["buckets"]["total"] and
-            #           self.wekadata["clusterinfo"]["drives"]["active"] == self.wekadata["clusterinfo"]["drives"]["total"] and
-            #           self.wekadata["clusterinfo"]["io_nodes"]["active"] == self.wekadata["clusterinfo"]["io_nodes"]["total"] and
-            #           self.wekadata["clusterinfo"]["hosts"]["backends"]["active"] == self.wekadata["clusterinfo"]["hosts"]["backends"]["total"]):
-            #       WekaClusterStatus="OK"
-            #    else:
-            #       WekaClusterStatus="WARN"
-
-            #    wekstatus = InfoMetricFamily( 'weka_status', "Weka cluster status (OK, etc)", value={"cluster":self.wekadata["clusterinfo"]["name"],"status":WekaClusterStatus} )
-            #    #wekstatus = GaugeMetricFamily( 'weka_status', "Weka cluster status (OK, etc)", labels=["cluster","status"] )
-            #    #wekstatus.add_metric([self.wekadata["clusterinfo"]["name"], WekaClusterStatus], 0)
-            #except:
-            #    track = traceback.format_exc()
-            #    print(track)
-            #    syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing weka status" )
-            #    print( "Error processing weka status indicator!" )
-
-            #yield wekstatus
 
             try:
                 # Uptime
