@@ -8,6 +8,6 @@ COPY weka-metrics-exporter.py /root/
 COPY weka-metrics-exporter.yml /root/
 COPY start_exporter.sh /root/
 
-RUN chmod +x /root/start_exporter.sh /root/weka-metrics-exporter.py
+RUN chmod +x /root/start_exporter.sh /root/weka-metrics-exporter
 
 ENTRYPOINT ["/root/start_exporter.sh"]
