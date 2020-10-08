@@ -37,7 +37,7 @@ Configure prometheus to pull data from the Weka metrics exporter (see prometheus
 
 *Important*: Currently the exporter pulls stats every 60 seconds so there is no use of setting the interval to a lower value.
 
-It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter.py -a -H <target host> &`. or better, run as a system service.
+It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter -a -H <target host> &`. or better, run as a system service.
 
 ## Configuration
 

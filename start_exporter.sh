@@ -19,5 +19,5 @@ do
     fi
 done
 
-cd /root/ && ./weka-metrics-exporter.py -a -H $@
+cd /root/ && ./weka-metrics-exporter -a -H $@
 
