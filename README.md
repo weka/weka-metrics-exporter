@@ -67,10 +67,12 @@ To run the image:  (one of the below examples)
 ```
 docker run -d --network=host weka-metrics-exporter 172.20.40.1
 # or
-docker run -d -p 8001:8001 weka-metrics-exporter 172.20.40.1
 
-# map /etc/hosts and a custom configuration .yml file into the container...
-docker run -d -p 8001:8001 --mount type=bind,source=/etc/hosts,target=/etc/hosts --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml weka-metrics-exporter 172.20.40.1
+# map in host logging, /etc/hosts file, and a custom .yml config file:
+docker run -d -p 8001:8001 --mount type=bind,source=/dev/log,target=/dev/log \
+    --mount type=bind,source=/etc/hosts,target=/etc/hosts \
+    --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
+    weka-metrics-exporter <wekahost>,<wekahost>,<wekahost>
 ```
 
 Comments, issues, etc can be reported in the repository's issues.
