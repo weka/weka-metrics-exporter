@@ -71,11 +71,7 @@ The pre-built container is now maintained on Docker Hub.  To download it, please
 
 If you download the pre-built docker container, it may be loaded with:
 
-```
-docker load -i  weka-metrics-exporter.tar
-```
-
-Then run with the usual Docker Run command.
+Then run with the usual Docker Run command. (see below)
 
 ## Docker Run Commands
 
