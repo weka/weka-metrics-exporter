@@ -81,7 +81,7 @@ To ensure that the container has access to DNS, use the ```--network=host``` dir
 
 If you do not use the ```--network=host```, then you might want to map /etc/hosts into the container with: ```--mount type=bind,source=/etc/hosts,target=/etc/hosts```
 
-If you have changed the default password on the cluster, you will need to pass authentication tokens to the container with ```--mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json```.  Use the ```weka login ``` command to generate the tokens, which are stored in ```~/.weka/auth-token.json```
+If you have changed the default password on the cluster, you will need to pass authentication tokens to the container with ```--mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json```.  Use the ```weka user login ``` command to generate the tokens, which are stored in ```~/.weka/auth-token.json```
 
 To have messages logged via syslog on the docker host, use ```--mount type=bind,source=/dev/log,target=/dev/log```
 
