@@ -63,19 +63,37 @@ docker save -o weka-metrics-exporter.tar weka-metrics-exporter
 docker load -i  weka-metrics-exporter.tar
 ```
 
-To run the image:  (one of the below examples)
-```
-# minimum command line (not suggested):
-docker run -d -p 8001:8001 weka-metrics-exporter 172.20.40.1
-# or
+## Running the pre-built Docker Container
 
-# Suggested:
-# map in host logging, /etc/hosts file, and a custom .yml config file:
+If you download the pre-built docker container, it may be loaded with:
+
+```
+docker load -i  weka-metrics-exporter.tar
+```
+
+Then run with the usual Docker Run command.
+
+## Docker Run Commands
+
+There are a variety of options when running the conatiner.
+
+To ensure that the container has access to DNS, use the ```--network=host``` directive
+
+If you do not use the ```--network=host```, then you might want to map /etc/hosts into the container with: ```--mount type=bind,source=/etc/hosts,target=/etc/hosts```
+
+If you have changed the default password on the cluster, you will need to pass authentication tokens to the container with ```--mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json```.  Use the ```weka login ``` command to generate the tokens, which are stored in ```~/.weka/auth-token.json```
+
+To have messages logged via syslog on the docker host, use ```--mount type=bind,source=/dev/log,target=/dev/log```
+
+If you would like to change the metrics gathered, you can modify the weka-metrics-exporter.yml configuration file, then map that into the container with ```--mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml```
+
+```
 docker run -d --network=host \
-    --mount type=bind,source=/dev/log,target=/dev/log \
-    --mount type=bind,source=/etc/hosts,target=/etc/hosts \
-    --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
-    weka-metrics-exporter <wekahost>,<wekahost>,<wekahost>
+  --mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json \
+  --mount type=bind,source=/dev/log,target=/dev/log \
+  --mount type=bind,source=/etc/hosts,target=/etc/hosts \
+  --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
+  weka-metrics-exporter <wekahost>,<wekahost>,<wekahost>
 ```
 
 Comments, issues, etc can be reported in the repository's issues.
