@@ -23,6 +23,8 @@ import syslog
 import os.path
 import signal
 import traceback
+import wekaapi
+from wekaapi import WekaApi
 #from pympler import muppy, summary
 
 
@@ -148,11 +150,10 @@ class wekaCollector():
 
     # types of things
     wekaInfo = {
-        "backendHostList": "cluster host -b",
-        "clientHostList": "cluster host -c",
-        "clusterinfo": "status",
-        "nodeList": "cluster nodes",
-        "fs_stat": "fs"
+        "hostList": dict( method="hosts_list", parms={} ),
+        "clusterinfo": dict( method="status", parms={} ),
+        "nodeList": dict( method="nodes_list", parms={} ),
+        "fs_stat": dict( method="filesystems_get_capacity", parms={} )
         }
 
     # this comes from a yaml file
@@ -181,6 +182,7 @@ class wekaCollector():
     host = None
     wekadata = {}
     buckets = []
+    authfile=None
     # figure out how to handle nodes that have more than one role...
     # maps are node-to-hostname, node-to-noderole (ie: FRONTEND, BACKEND, DRIVES), and host-to-hostrole (ie: server, client)
     weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }
@@ -190,11 +192,26 @@ class wekaCollector():
     weka_metrics_gather_gauge = Gauge('weka_metrics_exporter_weka_metrics_gather_seconds', 'Time spent gathering cluster info')
     prom_collect_gauge = Gauge('weka_metrics_exporter_prom_collect_seconds', 'Time spent in Prometheus collect')
 
-    def __init__( self, hostname, autohost, verbose, configfile ):
+    def __init__( self, hostname, autohost, verbose, configfile, authfile ):
+        goodhosts=[]
         hostlist = hostname.split(",")  # takes a comma-separated list of hosts
+        self.authfile = authfile
 
-        self.host = cycleIterator( hostlist )
-        self.servers = cycleIterator( hostlist )
+        # create api objects for all the hosts
+        self.api_objs={}
+        for host in hostlist:
+            try:
+                self.api_objs[host] = WekaApi( host, token_file=authfile )
+                goodhosts.append( host )
+            except Exception as exc:
+                print(f"EXCEPTION {exc}")
+                print( "cannot open api connection to {}".format(host) )
+
+        if len( goodhosts ) == 0:    # use assert instead?
+            raise Exception("no hosts can be contacted.  Aborting")
+
+        self.host = cycleIterator( goodhosts )
+        self.servers = cycleIterator( goodhosts )
         self.loadbalance = autohost
         self.verbose = verbose
 
@@ -206,11 +223,20 @@ class wekaCollector():
         for category, stat_dict in self.weka_stat_list.items():
             for stat, unit in stat_dict.items():
                 # have to create the category keys, so do it with a try: block
-                try:
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
-                except KeyError:
+                if category not in self.wekaIOCommands:
                     self.wekaIOCommands[category] = {}
-                    self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
+
+                parms = dict( category=category, stat=stat, interval='1m', per_node=True, no_zeroes=True )
+                self.wekaIOCommands[category][stat] = dict( method="stats_show", parms=parms )
+
+                #try:
+                #    self.wekaIOCommands[category][stat] = dict( method="stats_show", category=category, stat=stat, interval='1m', per_node=True, no_zeroes=True )
+                #    #self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
+                #    #print( api_connection.weka_api_command( "stats_show", category='ops', stat='OPS', interval='1m', per_node=True ) )
+                #except KeyError:
+                #    self.wekaIOCommands[category] = {}
+                #    #self.wekaIOCommands[category][stat] = "stats --start-time -1m --stat "+stat+" --category "+category+" -Z -R --per-node"
+                #    self.wekaIOCommands[category][stat] = dict( method="stats_show", category=category, stat=stat, interval='1m', per_node=True, no_zeroes=True )
 
 
         # set up buckets, [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, inf]
@@ -220,8 +246,8 @@ class wekaCollector():
         self.buckets.append( float("inf") )
         #print( self.buckets )
 
-        # gauges to track this program's performance, etc
-        self.cmd_exec_gauge = Gauge('weka_metrics_exporter_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
+        # gauges to track this program's performance, etc - conflicts by name when multiple clusters
+        #self.cmd_exec_gauge = Gauge('weka_metrics_exporter_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
         #print json.dumps(self.weka_stat_list, indent=2, sort_keys=True)
         # ------------- end of __init__() -------------
 
@@ -270,6 +296,8 @@ class wekaCollector():
         if returncode == 0:
             return returncode, json.loads( output )
         else:
+            syslog.syslog( syslog.LOG_ERR, "_run_json: Command returned " + str(returncode) + ' - ' + errp.decode("utf-8") )
+            print( "_run_json: Command returned " + str(returncode) + ' - ' + errp.decode("utf-8") )
             #print( "_run_json: command returned '" + errp.decode("utf-8") + "'" )
             return -1, {}
 
@@ -290,9 +318,6 @@ class wekaCollector():
             print( "_spawn(): no hosts to run on: " + command )
             sys.exit( 1 )   # this is actually really bad.
 
-        # build the command
-        full_command = "/usr/bin/weka " + command + " -J -H " + hostname
-
         # this is so we can track command execution time by command
         if category == None:
             gaugekey = stat
@@ -300,32 +325,38 @@ class wekaCollector():
             gaugekey = category+":"+stat
 
         if self.verbose:
-            print( "executing: " + full_command )
-        with self.cmd_exec_gauge.labels(gaugekey).time() as timer:  # this tracks execution time
-            try:
-                if category == None: 
-                    returncode, self.wekadata_new[stat] = self._run_json( full_command )
-                else:
-                    # check if the category has been initialized
-                    try:
-                        junk = self.wekadata_new[category]
-                    except KeyError:
-                        self.wekadata_new[category] = {}
-                    returncode, self.wekadata_new[category][stat] = self._run_json( full_command )
+            #print( "executing: " + full_command )
+            print( "executing: " + str(command) )
 
-            except:
-                track = traceback.format_exc()
-                print(track)
-                syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command )
-                print( "Error spawning command " + full_command )
+        #with self.cmd_exec_gauge.labels(gaugekey).time() as timer:  # this tracks execution time
+        try:
+            if category == None: 
+                # use API
+                #print( "method='{}'".format(command["method"]) )
+                self.wekadata_new[stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+            else:
+                # check if the category has been initialized
+                if category not in self.wekadata_new:
+                    self.wekadata_new[category] = {}
+                method=command["method"]
+                self.wekadata_new[category][stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+        except:
+            track = traceback.format_exc()
+            print(track)
+            syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + str(command) )
+            print( "Error spawning command " + str(command) )
 
         # ok, command crapped out.  Let's not use that host again, and give the command a recursive try
         # if all are bad, it'll eventually run out of hosts and fail above
+        """
+        # this shouldn't happen anymore... the api raises an exception if it fails
         if returncode != 0:
             syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + full_command + ": Removing host " + hostname + " from inventory" )
             print( "_spawn(): error spawning command " + full_command + ": Removing host " + hostname + " from inventory" )
             host.remove( hostname )
             self._spawn( stat, command, host, category )
+        """
+
 
 
 
@@ -357,12 +388,19 @@ class wekaCollector():
         if self.loadbalance:
             serverlist = []
             try:
-                for host in self.wekadata_new["backendHostList"]:
+                for host in self.wekadata_new["hostList"]:
                     # don't try to collect from inactive or otherwise offline hosts
-                    if host["state"] == "ACTIVE":
+                    if host["mode"] == "backend" and host["state"] == "ACTIVE":
                         serverlist.append( host["hostname"] )
                 self.servers.reset( serverlist )
+
+                # open an api connection (create an api object) for any servers that don't have one already
+                for host in serverlist:
+                    if host not in self.api_objs:
+                        self.api_objs[host] = WekaApi( host, token_file=self.authfile )
             except KeyError:
+                track = traceback.format_exc()
+                print(track)
                 syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): No data retrieved from cluster - is the cluster down?" )
                 print( "Error No data retrieved from cluster - is the cluster down?" )
                 return      # bail out if we can't talk to the cluster with this first command
@@ -380,11 +418,15 @@ class wekaCollector():
             for node in self.wekadata_new["nodeList"]:
                 self.weka_maps["node-host"][node["node_id"]] = node["hostname"]
                 self.weka_maps["node-role"][node["node_id"]] = node["roles"]    # note - this is a list
-            for host in self.wekadata_new["backendHostList"]:
-                self.weka_maps["host-role"][host["hostname"]] = "server"
-            for host in self.wekadata_new["clientHostList"]:
-                self.weka_maps["host-role"][host["hostname"]] = "client"
-        except:
+            for host in self.wekadata_new["hostList"]:
+                if host["mode"] == "backend":
+                    self.weka_maps["host-role"][host["hostname"]] = "server"
+                else:
+                    self.weka_maps["host-role"][host["hostname"]] = "client"
+        except Exception as exc:
+            print(f"EXCEPTION {exc}")
+            track = traceback.format_exc()
+            print(track)
             syslog.syslog( syslog.LOG_ERR, "weka_metrics_gather(): error building maps. Aborting data collection." )
             print( "Error building maps!" )
             return
@@ -662,6 +704,24 @@ class CustomCollector(object):
             print( "prom collecting" )
         return self.weka.prom_collect()
 
+def collect_worker( collector_obj ):
+    while True:
+        # populate/update the gauge objects with the data
+        #if args.verbose:
+        print( "collecting weka info" )
+        collector_obj.weka_metrics_gather()
+
+        # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
+        now = time.time()
+        secs_to_next_min = 60 - (now % 60)
+
+        # sleep until next weka stats update, so we don't waste cpu
+        #if args.verbose:
+        print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
+        time.sleep(secs_to_next_min +1)
+
+
+
 # classless functions
 def sigterm_handler(signal, frame):
     # save the state here or do whatever you want
@@ -689,10 +749,26 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
     parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
     parser.add_argument("-p", "--port", dest='port', default="8001", help="TCP port number to listen on")
-    parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host(s) (hostname/ip) to collect stats from. May be a comma-separated list")
+    #parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host(s) (hostname/ip) to collect stats from. May be a comma-separated list")
+    parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbose", dest='verbose', default=False, action="store_true", help="Enable verbose output" )
     args = parser.parse_args()
+
+    print( args.clusterspec )
+
+    clusters=[]
+    for spec in args.clusterspec:
+        speclist = spec.split( ":" )
+        cluster_hosts = speclist[0]
+        if len( speclist ) > 1:
+            cluster_auth = speclist[1]
+        else:
+            cluster_auth = None
+
+        clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
+
+    print( clusters )
 
     # start the syslogger
     syslog.openlog( os.path.basename( sys.argv[0] ), logoption=syslog.LOG_PID )
@@ -702,49 +778,45 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, sigint_handler)
     signal.signal(signal.SIGHUP, sighup_handler)
 
+    clusterthreads = simul_threads( len( clusters ) )
+
+    ### loop through wekahost, creating a wekaCollector for each cluster
     # create the wekaCollector object
-    wekacollect = wekaCollector( args.wekahost, args.autohost, args.verbose, args.configfile )
+    for cluster in clusters:
+        cluster["collector"] = wekaCollector( cluster["cluster_hosts"], args.autohost, args.verbose, args.configfile, cluster["cluster_auth"] )
+        clusterthreads.new( collect_worker, [cluster["collector"]] )
 
-    # debugging
-    #all_objects = muppy.get_objects()
 
-    # sleep to the top of the minute to ensure our first data collection is valid
-    now = time.time()
-    secs_to_next_min = 60 - (now % 60)
-    
-    # make sure we can collect before the top of the minute... not good to cross the minute boundry
-    if secs_to_next_min < 15:
-        print( "sleeping for " + str(secs_to_next_min +1) + "secs before first data collection" )
-        time.sleep(secs_to_next_min +1)
+    print( "spawning collectors" )
+    clusterthreads.starter()
+    print( "threads running")
 
-    # perform first data collection before we open web page
-    wekacollect.weka_metrics_gather()
+    time.sleep( 5 )
 
     #
     # Start up the server to expose the metrics.
     #
+    print( "starting http server" )
     start_http_server(int(args.port))
 
-    REGISTRY.register( CustomCollector(wekacollect) )
-    # Generate some requests.
+    for cluster in clusters:
+        print( "registering collector" )
+        ret = REGISTRY.register( CustomCollector(cluster["collector"]) )
+        print( "regsiter returned {}".format( ret ) )
+
+    # spin while everything runs
     while True:
 
         # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
-        now = time.time()
-        secs_to_next_min = 60 - (now % 60)
+        #now = time.time()
+        #secs_to_next_min = 60 - (now % 60)
 
         # muppy memory utilization
         #sum1 = summary.summarize(all_objects)
         #summary.print_(sum1)
 
         # sleep until next weka stats update, so we don't waste cpu
-        if args.verbose:
-            print( "sleeping for " + str(secs_to_next_min +1) + "secs" )
-        time.sleep(secs_to_next_min +1)
-
-        # populate/update the gauge objects with the data
-        if args.verbose:
-            print( "collecting weka info" )
-        wekacollect.weka_metrics_gather()
-
-
+        #if args.verbose:
+        #    print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
+        #time.sleep(secs_to_next_min +1)
+        time.sleep(60)
