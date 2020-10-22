@@ -247,7 +247,7 @@ class wekaCollector():
         #print( self.buckets )
 
         # gauges to track this program's performance, etc - conflicts by name when multiple clusters
-        #self.cmd_exec_gauge = Gauge('weka_metrics_exporter_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
+        self.cmd_exec_gauge = Gauge('weka_metrics_exporter_cmd_execute_seconds', 'Time spent gathering statistics', ["stat"])
         #print json.dumps(self.weka_stat_list, indent=2, sort_keys=True)
         # ------------- end of __init__() -------------
 
@@ -271,39 +271,7 @@ class wekaCollector():
 
         return stat_list, gsum
 
-    # run a command, expecting JSON output. return the returncode and stdout as a dict  int,dict
-    def _run_json( self, command_string ):
-        # prepare command line - change string into list
-        command = command_string.split( " " )
-
-        try:
-            p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE )
-            outp, errp = p.communicate()
-            output = outp.decode("utf-8")
-            returncode = p.returncode
-
-        except:     # all other errors
-            track = traceback.format_exc()
-            print(track)
-            syslog.syslog( syslog.LOG_ERR, "_run_json(): unusual error running: " + command_string )
-            print( "_run_json(): unusual error running: " + command_string )
-            return -1, {}
-
-        #print( "DEBUG: return code from '" + command_string + "' was " + str( returncode ) )
-        #print( command )
-        #print( "DEBUG: output from '" + command_string + "' was " + output )
-
-        if returncode == 0:
-            return returncode, json.loads( output )
-        else:
-            syslog.syslog( syslog.LOG_ERR, "_run_json: Command returned " + str(returncode) + ' - ' + errp.decode("utf-8") )
-            print( "_run_json: Command returned " + str(returncode) + ' - ' + errp.decode("utf-8") )
-            #print( "_run_json: command returned '" + errp.decode("utf-8") + "'" )
-            return -1, {}
-
-
-    # internal routine called from only a couple of places
-    # executes a weka command and saves output JSON
+    # calls the weka api to populate a stat
     def _spawn( self, stat, command, host, category ):     # would schedule() be a better name?
         # host is a cycleIterator object with a list of hosts in it
         hostname = host.next()      # get the name of the host we should execute the command on
@@ -325,26 +293,22 @@ class wekaCollector():
             gaugekey = category+":"+stat
 
         if self.verbose:
-            #print( "executing: " + full_command )
-            print( "executing: " + str(command) )
+            print( "executing: {} on {}".format(str(command), hostname) )
 
-        #with self.cmd_exec_gauge.labels(gaugekey).time() as timer:  # this tracks execution time
-        try:
-            if category == None: 
-                # use API
-                #print( "method='{}'".format(command["method"]) )
-                self.wekadata_new[stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
-            else:
-                # check if the category has been initialized
-                if category not in self.wekadata_new:
-                    self.wekadata_new[category] = {}
-                method=command["method"]
-                self.wekadata_new[category][stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
-        except:
-            track = traceback.format_exc()
-            print(track)
-            syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command " + str(command) )
-            print( "Error spawning command " + str(command) )
+        with self.cmd_exec_gauge.labels(gaugekey).time() as timer:  # this tracks execution time
+            try:
+                if category == None: 
+                    self.wekadata_new[stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+                else:
+                    # check if the category has been initialized
+                    if category not in self.wekadata_new:
+                        self.wekadata_new[category] = {}
+                    self.wekadata_new[category][stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+            except:
+                track = traceback.format_exc()
+                print(track)
+                syslog.syslog( syslog.LOG_ERR, "_spawn(): error spawning command {} on host {}".format(str(command), hostname) )
+                print( "_spawn(): error spawning command {} on host {}".format(str(command), hostname) )
 
         # ok, command crapped out.  Let's not use that host again, and give the command a recursive try
         # if all are bad, it'll eventually run out of hosts and fail above
@@ -622,10 +586,12 @@ class wekaCollector():
 
 
             # general metrics Gauge
-            weka_stats_gauge = GaugeMetricFamily('weka_stats', 'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics', labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
+            weka_stats_gauge = GaugeMetricFamily('weka_stats', 'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics', 
+                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
 
             # histogram of io blocksizes - for all histogram metrics
-            weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize", "weka blocksize distribution histogram", labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
+            weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize", "weka blocksize distribution histogram", 
+                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
 
             # get all the IO stats...
             #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
@@ -666,13 +632,9 @@ class wekaCollector():
                                     syslog.syslog( syslog.LOG_ERR, "prom_collect(): error processing io stats" )
                                     print( "Error processing io stats!" )
                             else:   
-                                #weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize_"+category+"_"+stat, "weka "+category+" "+stat+" blocksizes", # should this be above?
-                                #    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
 
                                 try:
                                     value_dict, gsum = self._parse_sizes_values( node["stat_value"] )  # Turn the stat_value into a dict
-                                    #print( value_dict )
-                                    #print( gsum )
                                     weka_io_histogram.add_metric( labels=labelvalues, buckets=value_dict, gsum_value=gsum )
                                 except:
                                     track = traceback.format_exc()
@@ -690,31 +652,6 @@ class wekaCollector():
         return tmp[0]
 
 
-"""
-class GaugeRegistry():
-    def __init__(self):
-        self.gaugelist = {}
-
-    def register(self, obj):
-        self.gaugelist[obj.name] = obj
-
-    def get(self, name):
-        return self.gaugelist[name]
-
-
-
-class ThreadedRegistry():
-    def __init__(self):
-        self.registered_objs = []
-
-    def register(self, object):
-        self.registered_objs.append( object )
-
-    def list(self):
-        return self.registered_objs
-"""
-
-
 
 # our prometheus collector
 class CustomCollector(object):
@@ -728,11 +665,11 @@ class CustomCollector(object):
         return self.weka.prom_collect()
 
 
-def collect_worker( collector_obj ):
+def collect_worker( collector_obj, verbose ):
     while True:
         # populate/update the gauge objects with the data
-        #if args.verbose:
-        print( "collecting weka info" )
+        if verbose:
+            print( "collecting weka info" )
         collector_obj.weka_metrics_gather()
 
         # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
@@ -740,8 +677,8 @@ def collect_worker( collector_obj ):
         secs_to_next_min = 60 - (now % 60)
 
         # sleep until next weka stats update, so we don't waste cpu
-        #if args.verbose:
-        print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
+        if verbose:
+            print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
         time.sleep(secs_to_next_min +1)
 
 
@@ -780,28 +717,13 @@ if __name__ == '__main__':
     parser.add_argument("-v", "--verbose", dest='verbose', default=False, action="store_true", help="Enable verbose output" )
     args = parser.parse_args()
 
-    print( args.clusterspec )
 
-    """
-    clusters=[]
-    for spec in args.clusterspec:
-        speclist = spec.split( ":" )
-        cluster_hosts = speclist[0]
-        if len( speclist ) > 1:
-            cluster_auth = speclist[1]
-        else:
-            cluster_auth = None
-
-        clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
-    """
     clusterspeclist = args.clusterspec.split(":")
     clusterhosts = clusterspeclist[0]
     if len(clusterspeclist) > 1:
         cluster_auth = clusterspeclist[1]
     else:
         cluster_auth = None
-
-    #print( clusters )
 
     # start the syslogger
     syslog.openlog( os.path.basename( sys.argv[0] ), logoption=syslog.LOG_PID )
@@ -824,21 +746,4 @@ if __name__ == '__main__':
 
     ret = REGISTRY.register( CustomCollector( collector ) )
 
-    collect_worker( collector )
-
-    # spin while everything runs
-    #while True:
-
-        # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
-        #now = time.time()
-        #secs_to_next_min = 60 - (now % 60)
-
-        # muppy memory utilization
-        #sum1 = summary.summarize(all_objects)
-        #summary.print_(sum1)
-
-        # sleep until next weka stats update, so we don't waste cpu
-        #if args.verbose:
-        #    print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
-        #time.sleep(secs_to_next_min +1)
-        #time.sleep(60)
+    collect_worker( collector, args.verbose )
