@@ -611,7 +611,7 @@ class wekaCollector():
 
 
             # yield for each metric
-            for name, metric in metric_objs.items():
+            for metric in metric_objs.values():
                 yield metric
 
         # ------------- end of prom_collect() -------------
