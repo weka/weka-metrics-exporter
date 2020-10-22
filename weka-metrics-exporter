@@ -610,8 +610,7 @@ class wekaCollector():
                     cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], fs["name"]], fs["available_total"])
                     yield cluster_info
 
-                    cluster_info = GaugeMetricFamily( 'weka_fs_used_bytes', 'Filesystem used capacity',
-                            labels=["cluster",'name'] )
+                    cluster_info = GaugeMetricFamily( 'weka_fs_used_bytes', 'Filesystem used capacity', labels=["cluster",'name'] )
                     cluster_info.add_metric([self.wekadata["clusterinfo"]["name"], fs["name"]], fs["used_total"])
                     yield cluster_info
 
@@ -623,12 +622,10 @@ class wekaCollector():
 
 
             # general metrics Gauge
-            weka_stats_gauge = GaugeMetricFamily('weka_stats', 'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics',
-                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
+            weka_stats_gauge = GaugeMetricFamily('weka_stats', 'WekaFS statistics. For more info refer to: https://docs.weka.io/usage/statistics/list-of-statistics', labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'])
 
             # histogram of io blocksizes - for all histogram metrics
-            weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize", "weka blocksize distribution histogram", 
-                    labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
+            weka_io_histogram = GaugeHistogramMetricFamily( "weka_blocksize", "weka blocksize distribution histogram", labels=['cluster','host_name','host_role','node_id','node_role','category','stat','unit'] )
 
             # get all the IO stats...
             #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
@@ -692,17 +689,44 @@ class wekaCollector():
         tmp = time_string.split( '.' )
         return tmp[0]
 
+
+"""
+class GaugeRegistry():
+    def __init__(self):
+        self.gaugelist = {}
+
+    def register(self, obj):
+        self.gaugelist[obj.name] = obj
+
+    def get(self, name):
+        return self.gaugelist[name]
+
+
+
+class ThreadedRegistry():
+    def __init__(self):
+        self.registered_objs = []
+
+    def register(self, object):
+        self.registered_objs.append( object )
+
+    def list(self):
+        return self.registered_objs
+"""
+
+
+
 # our prometheus collector
 class CustomCollector(object):
     weka = None
     def __init__(self, weka):
         self.weka = weka
-        pass
 
     def collect(self):
         if self.weka.verbose:
             print( "prom collecting" )
         return self.weka.prom_collect()
+
 
 def collect_worker( collector_obj ):
     while True:
@@ -750,13 +774,15 @@ if __name__ == '__main__':
     parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
     parser.add_argument("-p", "--port", dest='port', default="8001", help="TCP port number to listen on")
     #parser.add_argument("-H", "--HOST", dest='wekahost', default="localhost", help="Specify the Weka host(s) (hostname/ip) to collect stats from. May be a comma-separated list")
-    parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
+    #parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
+    parser.add_argument( 'clusterspec', default="localhost", help="Cluster specifications.  <host>,<host>,...:authfile" )
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbose", dest='verbose', default=False, action="store_true", help="Enable verbose output" )
     args = parser.parse_args()
 
     print( args.clusterspec )
 
+    """
     clusters=[]
     for spec in args.clusterspec:
         speclist = spec.split( ":" )
@@ -767,8 +793,15 @@ if __name__ == '__main__':
             cluster_auth = None
 
         clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
+    """
+    clusterspeclist = args.clusterspec.split(":")
+    clusterhosts = clusterspeclist[0]
+    if len(clusterspeclist) > 1:
+        cluster_auth = clusterspeclist[1]
+    else:
+        cluster_auth = None
 
-    print( clusters )
+    #print( clusters )
 
     # start the syslogger
     syslog.openlog( os.path.basename( sys.argv[0] ), logoption=syslog.LOG_PID )
@@ -778,20 +811,10 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, sigint_handler)
     signal.signal(signal.SIGHUP, sighup_handler)
 
-    clusterthreads = simul_threads( len( clusters ) )
 
-    ### loop through wekahost, creating a wekaCollector for each cluster
     # create the wekaCollector object
-    for cluster in clusters:
-        cluster["collector"] = wekaCollector( cluster["cluster_hosts"], args.autohost, args.verbose, args.configfile, cluster["cluster_auth"] )
-        clusterthreads.new( collect_worker, [cluster["collector"]] )
+    collector = wekaCollector( clusterhosts, args.autohost, args.verbose, args.configfile, cluster_auth )
 
-
-    print( "spawning collectors" )
-    clusterthreads.starter()
-    print( "threads running")
-
-    time.sleep( 5 )
 
     #
     # Start up the server to expose the metrics.
@@ -799,13 +822,12 @@ if __name__ == '__main__':
     print( "starting http server" )
     start_http_server(int(args.port))
 
-    for cluster in clusters:
-        print( "registering collector" )
-        ret = REGISTRY.register( CustomCollector(cluster["collector"]) )
-        print( "regsiter returned {}".format( ret ) )
+    ret = REGISTRY.register( CustomCollector( collector ) )
+
+    collect_worker( collector )
 
     # spin while everything runs
-    while True:
+    #while True:
 
         # weka updates stats at the top of the minute.  Wait until 1 sec past to ensure we have new stats
         #now = time.time()
@@ -819,4 +841,4 @@ if __name__ == '__main__':
         #if args.verbose:
         #    print( "sleeping for " + str(int(secs_to_next_min +1)) + " secs" )
         #time.sleep(secs_to_next_min +1)
-        time.sleep(60)
+        #time.sleep(60)
