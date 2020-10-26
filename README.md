@@ -59,7 +59,7 @@ docker run -d --network=host \
   --mount type=bind,source=/dev/log,target=/dev/log \
   --mount type=bind,source=/etc/hosts,target=/etc/hosts \
   --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
-  wekasolutions/metrics-exporter weka01, weka02,weka09:~/.weka/myauthfile
+  wekasolutions/metrics-exporter -vv -a weka01, weka02,weka09:~/.weka/myauthfile
 ```
 
 ## Metrics Exported
