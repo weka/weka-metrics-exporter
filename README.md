@@ -55,7 +55,7 @@ For example:
 
 ```
 docker run -d --network=host \
-  --mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json \
+  --mount type=bind,source=/root/.weka/,target=/root/.weka/ \
   --mount type=bind,source=/dev/log,target=/dev/log \
   --mount type=bind,source=/etc/hosts,target=/etc/hosts \
   --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
