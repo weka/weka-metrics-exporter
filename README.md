@@ -27,7 +27,7 @@ To run outside a container:
 
 The pre-built container is now maintained on Docker Hub.  To download it, please run:
 
-```docker pull wekasolutions/weka-metrics-exporter:latest```
+```docker pull wekasolutions/metrics-exporter:latest```
 
 If you download the pre-built docker container, it may be loaded with:
 
@@ -59,7 +59,7 @@ docker run -d --network=host \
   --mount type=bind,source=/dev/log,target=/dev/log \
   --mount type=bind,source=/etc/hosts,target=/etc/hosts \
   --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
-  weka-metrics-exporter weka01, weka02,weka09:~/.weka/myauthfile
+  wekasolutions/metrics-exporter weka01, weka02,weka09:~/.weka/myauthfile
 ```
 
 ## Metrics Exported
@@ -99,14 +99,14 @@ To build this repositiory:
 
 ```
 git clone <this repo>
-docker build --tag weka-metrics-exporter .
+docker build --tag wekasolutions/metrics-exporter .
 ```
 or
-```docker build --tag weka-metrics-exporter https://github.com/weka/weka-metrics-exporter.git```
+```docker build --tag wekasolutions/metrics-exporter https://github.com/weka/weka-metrics-exporter.git```
 
 To save and/or load the image
 ```
-docker save -o weka-metrics-exporter.tar weka-metrics-exporter
+docker save -o weka-metrics-exporter.tar wekasolutions/metrics-exporter
 docker load -i  weka-metrics-exporter.tar
 ```
 Comments, issues, etc can be reported in the repository's issues.
