@@ -4,6 +4,14 @@ All-new Version 3
 
 Metrics exporter for WekaFS. Gathers metrics and statistics from Weka Clusters and exposes a metrics endpoint for Prometheus to scrape.
 
+## What's new
+
+Largely re-written and modularized.   
+Now using the weka api to talk to the cluster(s), rather than spawning weka commands.     
+Improved logging and new verbosity levels.    
+It can now gather metrics from multiple clusters     
+Changed command-line arguments, particularly cluster specification (see below - removed -H option)     
+
 ## Installation
 
 The simplest installation is to get the docker container via `docker pull weka-solutions/weka-metrics-exporter:latest`
@@ -47,7 +55,7 @@ For example:
 
 ```
 docker run -d --network=host \
-  --mount type=bind,source=/root/.weka/auth-token.json,target=/root/.weka/auth-token.json \
+  --mount type=bind,source=/root/.weka/,target=/root/.weka/ \
   --mount type=bind,source=/dev/log,target=/dev/log \
   --mount type=bind,source=/etc/hosts,target=/etc/hosts \
   --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
