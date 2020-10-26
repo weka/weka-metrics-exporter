@@ -86,12 +86,11 @@ Configure prometheus to pull data from the Weka metrics exporter (see prometheus
 
 *Important*: Weka clusters update their performance stats once per minute, so setting Prometheus to scrape more often than every 60s is not useful.
 
-It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter -a -H <target host> &`. or better, run as a system service.
+It is recommended to be run as a daemon: `nohup ./weka-metrics-exporter -a <target host> &`. or better, run as a system service.
 
 ## Configuration
 
 - Use the `-a` option to load-balance the data collection over all the Weka backends.
-- Use `-H` hostname as needed (for example, if you're not running this on a client or backend).
 - `-p` port sets the port number - Default port is 8001
 - `-h` will print the help message.
 
@@ -108,8 +107,8 @@ or
 
 To save and/or load the image
 ```
-docker save -o weka-metrics-exporter.tar wekasolutions/metrics-exporter
-docker load -i  weka-metrics-exporter.tar
+docker save -o metrics-exporter.tar wekasolutions/metrics-exporter
+docker load -i  metrics-exporter.tar
 ```
 Comments, issues, etc can be reported in the repository's issues.
 
