@@ -132,15 +132,18 @@ class WekaApi():
 
     def _get_tokens(self, token_file):
         if token_file != None:
-            self._tokens=None
+            tokens=None
             path = os.path.expanduser(token_file)
             if os.path.exists(path):
                 try:
                     with open( path ) as fp:
-                        self._tokens = json.load( fp )
-                    return
+                        tokens = json.load( fp )
+                    return tokens
                 except Exception as error:
+                    log.critical( "wekaapi: unable to open token file {}".format(token_file) )
                     raise WekaApiException('warning: Could not parse {0}, ignoring file'.format(path), file=sys.stderr)
+            else:
+                log.error( "wekaapi: token file {} not found".format(token_file) )
         return None
 
 
@@ -215,6 +218,7 @@ class WekaApi():
         else:
             self.authorization = None
             self._tokens= None
+            log.critical( "Login failed" )
             raise WekaApiException( "Login failed" )
 
         self.headers["Authorization"] = self.authorization
