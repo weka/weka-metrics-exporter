@@ -86,7 +86,12 @@ if __name__ == '__main__':
     # create the wekaCollector object
     collector = wekaCollector( args.autohost, args.configfile )
     for cluster in clusters:
-        collector.add_cluster( wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"] ) )
+        try:
+            cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"] ) 
+        except:
+            logger.critical( "unable to create cluster object" )
+            continue
+        collector.add_cluster( cluster_obj )
 
 
     #
