@@ -6,5 +6,5 @@ if [ $# -eq 0 ]
     exit
 fi
 
-cd /root/ && ./weka-metrics-exporter -vv -a $@
+cd /root/ && ./weka-metrics-exporter $@
 
