@@ -29,7 +29,9 @@ The pre-built container is now maintained on Docker Hub.  To download it, please
 
 ```docker pull wekasolutions/metrics-exporter:latest```
 
-If you download the pre-built docker container, it may be loaded with:
+If you download the pre-built docker container from this github repository, it may be loaded with:
+
+```docker load metrics-exporter.tar```
 
 Then run with the usual Docker Run command. (see below)
 
