@@ -11,6 +11,7 @@ COPY cycle.py /root/
 COPY signals.py /root/
 COPY sthreads.py /root/
 COPY wekaapi.py /root/
+COPY collector.py /root/
 
 RUN chmod +x /root/start_exporter.sh /root/weka-metrics-exporter
 
