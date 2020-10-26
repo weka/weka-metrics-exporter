@@ -85,6 +85,7 @@ if __name__ == '__main__':
 
     # create the wekaCollector object
     collector = wekaCollector( args.autohost, args.configfile )
+    num_good = 0
     for cluster in clusters:
         try:
             cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"] ) 
@@ -92,7 +93,11 @@ if __name__ == '__main__':
             logger.critical( "unable to create cluster object" )
             continue
         collector.add_cluster( cluster_obj )
+        num_good += 1
 
+    if num_good == 0:
+        logger.critical( "no clusters could be contacted, aborting" )
+        sys.exit( 1 )
 
     #
     # Start up the server to expose the metrics.
