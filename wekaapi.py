@@ -183,6 +183,14 @@ class WekaApi():
                 newkey = key.split( "I" )[0].lower() + "_id"
                 value_dict[newkey] = key
                 resp_list.append( value_dict )
+            # older weka versions lack a "mode" key in the hosts-list
+            if method == "hosts_list":
+                for value_dict in resp_list:
+                    if "mode" not in value_dict:
+                        if "drives_dedicated_cores" != 0:
+                            value_dict["mode"] = "backend"
+                        else:
+                            value_dict["mode"] = "client"
             return resp_list
 
         # ignore other method types for now.
