@@ -11,6 +11,7 @@ from threading import Lock
 # used to implement --autohost
 class cycleIterator():
     def __init__( self, list ):
+        # list is a [] kind of list
         self._lock = Lock() # make it re-entrant (thread-safe)
         self.list = list
         self.current = 0
@@ -39,7 +40,7 @@ class cycleIterator():
 
     def remove( self, item ):
         with self._lock:
-            self.list.remove( item )
+            self.list.remove( item )    # it's really a list [], so use the [].remove() method.
 
     def __str__( self ):
         with self._lock:
