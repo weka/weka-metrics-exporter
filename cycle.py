@@ -41,6 +41,8 @@ class cycleIterator():
     def remove( self, item ):
         with self._lock:
             self.list.remove( item )    # it's really a list [], so use the [].remove() method.
+            if self.current >= len( self.list ):    # did we remove the last one in the list?
+                self.current = 0
 
     def __str__( self ):
         with self._lock:
