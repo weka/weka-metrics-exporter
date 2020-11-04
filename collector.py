@@ -216,7 +216,7 @@ class wekaCluster(wekaCollector):
         self.singlethreaded = False  # default
         self.loadbalance = True      # default
         self.servers = None          # current list of servers to execute commands on
-        self.host = None
+        self.host = None             # original list of servers given on the command line
         self.wekadata = {}
         self.authfile=None
         self.weka_maps = { "node-host": {}, "node-role": {}, "host-role": {} }
@@ -273,36 +273,43 @@ class wekaCluster(wekaCollector):
         # no hosts?   Since we can remove hosts that don't respond, we can run out of them
         # this is essentially a terminal error for the program.  They didn't give us any valid hosts,
         # or we can't talk to them (network issues and such)
-        if( hostname == None ):
+        while hostname != None:
+
+            # this is so we can track command execution time by command
+            if category == None:
+                gaugekey = stat
+            else:
+                gaugekey = category+":"+stat
+
+            #if verbose:
+            #    print( "executing: {} on {}".format(str(command), hostname) )
+
+            # this is funky with the cluster name, so... get rid of it
+            #with cmd_exec_gauge.labels(gaugekey,self.clustername).time() as timer:  # this tracks execution time
+            try:
+                log.debug( "calling Weka API on {}".format( hostname ) )
+                if category == None: 
+                    self.wekadata[stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+                else:
+                    # check if the category has been initialized
+                    if category not in self.wekadata:
+                        self.wekadata[category] = {}
+                    self.wekadata[category][stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
+            except:
+                track = traceback.format_exc()
+                print(track)
+                log.error( "_call_weka_api(): cluster={}, error spawning command {} on host {}".format(self.clustername, str(command), hostname) )
+                host.remove( hostname )  # we got an error, remove it from the list of good servers (updates again next round)
+                hostname = host.next()  # try again with the next host in the list
+            finally:
+                return
+
+
+        if hostname == None:
             track = traceback.format_exc()
             print(track)
             log.error( "_call_weka_api(): no hosts to run on.  cluster:{}, {}".format(self.clustername, command) )
             sys.exit( 1 )   # this is actually really bad.
-
-        # this is so we can track command execution time by command
-        if category == None:
-            gaugekey = stat
-        else:
-            gaugekey = category+":"+stat
-
-        #if verbose:
-        #    print( "executing: {} on {}".format(str(command), hostname) )
-
-        # this is funky with the cluster name, so... get rid of it
-        #with cmd_exec_gauge.labels(gaugekey,self.clustername).time() as timer:  # this tracks execution time
-        try:
-            if category == None: 
-                self.wekadata[stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
-            else:
-                # check if the category has been initialized
-                if category not in self.wekadata:
-                    self.wekadata[category] = {}
-                self.wekadata[category][stat] = self.api_objs[hostname].weka_api_command( command["method"], **command["parms"] )
-        except:
-            track = traceback.format_exc()
-            print(track)
-            log.error( "_call_weka_api(): cluster={}, error spawning command {} on host {}".format(self.clustername, str(command), hostname) )
-
 
     # start here
     #
@@ -328,7 +335,7 @@ class wekaCluster(wekaCollector):
         # get info from weka cluster
         for info, command in self.WEKAINFO.items():
             try:
-                thread_runner.new( self._call_weka_api, (info, command, self.host, None ) )
+                thread_runner.new( self._call_weka_api, (info, command, self.host, None ) )     # always start with the original list of servers from command line
             except:
                 log.error( "gather(): error scheduling wekainfo threads for cluster {}".format(self.clustername) )
                 return      # bail out if we can't talk to the cluster with this first command
@@ -341,7 +348,7 @@ class wekaCluster(wekaCollector):
             try:
                 for host in self.wekadata["hostList"]:
                     # don't try to gather from inactive or otherwise offline hosts
-                    if host["mode"] == "backend" and host["state"] == "ACTIVE":
+                    if host["mode"] == "backend" and host["state"] == "ACTIVE" and host["status"] == "UP":
                         serverlist.append( host["hostname"] )
                 self.servers.reset( serverlist )
 
@@ -506,7 +513,7 @@ class wekaCluster(wekaCollector):
         except:
             track = traceback.format_exc()
             print(track)
-            log.error( "gather(): error processing filesystem stats vor cluster {}".format(self.clustername) )
+            log.error( "gather(): error processing filesystem stats for cluster {}".format(self.clustername) )
 
         # get all the IO stats...
         #            ['cluster','host_name','host_role','node_id','node_role','category','stat','unit']
@@ -539,6 +546,8 @@ class wekaCluster(wekaCollector):
 
                         if unit != "sizes":
                             try:
+                                if category == 'ops_nfs':
+                                    log.debug( "{} {}".format(stat, node["stat_value"] ) )
                                 metric_objs['weka_stats_gauge'].add_metric(labelvalues, node["stat_value"])
                             except:
                                 track = traceback.format_exc()
