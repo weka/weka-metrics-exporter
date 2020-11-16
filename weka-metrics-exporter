@@ -9,6 +9,7 @@ import os
 import sys
 from prometheus_client import start_http_server, REGISTRY
 import time
+import traceback
 
 # local imports
 from collector import wekaCollector, wekaCluster
@@ -43,6 +44,8 @@ if __name__ == '__main__':
 
     # set the root logger
     logger = logging.getLogger()
+    FORMAT = "%(filename)s:%(lineno)s:%(funcName)s():%(message)s"
+    logging.basicConfig(format=FORMAT)
     logger.setLevel(loglevel)
 
     # create handler to log to syslog
@@ -68,8 +71,8 @@ if __name__ == '__main__':
     #sublog.setLevel(loglevel)
 
     # configure logging in wekaapi module
-    sublog = logging.getLogger( "wekaapi" )
-    sublog.setLevel(logging.INFO)   # limit wekaapi output level - it's chatty
+    #sublog = logging.getLogger( "wekaapi" )
+    #sublog.setLevel(logging.DEBUG)
 
 
     # parse the command line, get our hosts and associated auth files
@@ -84,13 +87,15 @@ if __name__ == '__main__':
         clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
 
     # create the wekaCollector object
-    collector = wekaCollector( args.autohost, args.configfile )
+    collector = wekaCollector( args.configfile )
     num_good = 0
     for cluster in clusters:
         try:
-            cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"] ) 
-        except:
-            logger.critical( "unable to create cluster object" )
+            cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"], args.autohost ) 
+        except Exception as exc:
+            track = traceback.format_exc()
+            print(track)
+            logger.critical( f"unable to create cluster object: {exc}" )
             continue
         collector.add_cluster( cluster_obj )
         num_good += 1

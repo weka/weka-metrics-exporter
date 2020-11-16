@@ -6,9 +6,9 @@
 # author: Vince Fleming, vince@weka.io
 
 import signal
-import syslog
+#import syslog
 import sys
-from logging import debug, info, warning, error, critical, getLogger
+from logging import debug, getLogger
 
 log = getLogger(__name__)
 
