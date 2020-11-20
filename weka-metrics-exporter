@@ -12,7 +12,8 @@ import time
 import traceback
 
 # local imports
-from collector import wekaCollector, wekaCluster
+from collector import wekaCollector
+from wekacluster import WekaCluster
 import signals
 
 
@@ -45,7 +46,7 @@ if __name__ == '__main__':
     # set the root logger
     logger = logging.getLogger()
     FORMAT = "%(filename)s:%(lineno)s:%(funcName)s():%(message)s"
-    logging.basicConfig(format=FORMAT)
+    #logging.basicConfig(format=FORMAT)
     logger.setLevel(loglevel)
 
     # create handler to log to syslog
@@ -55,8 +56,8 @@ if __name__ == '__main__':
 
     # create handler to log to stderr
     console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(FORMAT))
     #console_handler.setLevel(loglevel)
-    console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 
     # add handlers to root logger
     logger.addHandler(syslog_handler)
@@ -71,8 +72,12 @@ if __name__ == '__main__':
     #sublog.setLevel(loglevel)
 
     # configure logging in wekaapi module
-    #sublog = logging.getLogger( "wekaapi" )
-    #sublog.setLevel(logging.DEBUG)
+    sublog = logging.getLogger( "wekaapi" )
+    sublog.setLevel(logging.ERROR)
+
+    # configure logging in sthreads module
+    sublog = logging.getLogger( "sthreads" )
+    sublog.setLevel(logging.ERROR)
 
 
     # parse the command line, get our hosts and associated auth files
@@ -91,7 +96,7 @@ if __name__ == '__main__':
     num_good = 0
     for cluster in clusters:
         try:
-            cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"], args.autohost ) 
+            cluster_obj = WekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"], args.autohost ) 
         except Exception as exc:
             track = traceback.format_exc()
             print(track)
@@ -111,7 +116,7 @@ if __name__ == '__main__':
     start_http_server(int(args.port))
 
     # register our custom collector
-    ret = REGISTRY.register( collector )
+    REGISTRY.register( collector )
 
 
     while True:

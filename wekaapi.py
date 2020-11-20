@@ -35,7 +35,7 @@ try:
 except ImportError:
     from urlparse import urljoin, urlparse
 
-from logging import debug, info, warning, error, critical, getLogger, DEBUG
+from logging import debug, info, warning, error, critical, getLogger, DEBUG, StreamHandler, Formatter
 
 log = getLogger(__name__)
  
@@ -111,29 +111,36 @@ class WekaApi():
 
     def _open_connection( self ):
         host_unreachable=False
+        try_again = True
 
-        log.debug( " _open_connection(): attempting to open connection: timeout={}, scheme={}".format(self._timeout, self._scheme) )
-        try:
-            if self._scheme == "https":
-                self._conn = httpclient.HTTPSConnection(self._host, self._port, timeout=self._timeout)
-            else:
-                self._conn = httpclient.HTTPConnection(self._host, self._port, timeout=self._timeout)
-        except Exception as exc:
-            log.critical( " _open_connection(): {}: unable to open connection to {}".format(exc, self._host) )
-            host_unreachable = True
-
-        if not host_unreachable:
+        while try_again:
+            log.debug( " _open_connection(): attempting to open connection: timeout={}, scheme={}".format(self._timeout, self._scheme) )
             try:
-                self._login()
-            except ssl.SSLError:
-                # https failed, try http - http would never produce an ssl error
-                log.debug( " _open_connection(): https failed" )
-                self._scheme = "http"
-                self._open_connection() # try again
-            except socket.gaierror: # general failure
-                host_unreachable=True
-            except Exception:   # any other failure
-                host_unreachable=True
+                if self._scheme == "https":
+                    self._conn = httpclient.HTTPSConnection(self._host, self._port, timeout=self._timeout)
+                else:
+                    self._conn = httpclient.HTTPConnection(self._host, self._port, timeout=self._timeout)
+            except Exception as exc:
+                log.critical( " _open_connection(): {}: unable to open connection to {}".format(exc, self._host) )
+                host_unreachable = True
+
+            if not host_unreachable:
+                try:
+                    self._login()
+                    return
+                except ssl.SSLError:
+                    # https failed, try http - http would never produce an ssl error
+                    log.debug( " _open_connection(): https failed" )
+                    self._scheme = "http"
+                    try_again = True
+                except socket.gaierror: # general failure
+                    log.debug("socket.gaierror")
+                    host_unreachable=True
+                    try_again = False
+                except Exception as exc:   # any other failure
+                    log.critical(f"{exc}")
+                    host_unreachable=True
+                    try_again = False
 
         if host_unreachable:
             raise WekaApiException( " _open_connection(): unable to open connection to host " + self._host )
@@ -187,20 +194,21 @@ class WekaApi():
         words = len( splitmethod )
 
         # does it end in "_list"?
-        if splitmethod[words-1] == "list" or method == "filesystems_get_capacity":
-            for key, value_dict in raw_resp.items():
-                newkey = key.split( "I" )[0].lower() + "_id"
-                value_dict[newkey] = key
-                resp_list.append( value_dict )
-            # older weka versions lack a "mode" key in the hosts-list
-            if method == "hosts_list":
-                for value_dict in resp_list:
-                    if "mode" not in value_dict:
-                        if "drives_dedicated_cores" != 0:
-                            value_dict["mode"] = "backend"
-                        else:
-                            value_dict["mode"] = "client"
-            return resp_list
+        if method != "alerts_list":
+            if splitmethod[words-1] == "list" or method == "filesystems_get_capacity":
+                for key, value_dict in raw_resp.items():
+                    newkey = key.split( "I" )[0].lower() + "_id"
+                    value_dict[newkey] = key
+                    resp_list.append( value_dict )
+                # older weka versions lack a "mode" key in the hosts-list
+                if method == "hosts_list":
+                    for value_dict in resp_list:
+                        if "mode" not in value_dict:
+                            if "drives_dedicated_cores" != 0:
+                                value_dict["mode"] = "backend"
+                            else:
+                                value_dict["mode"] = "client"
+                return resp_list
 
         # ignore other method types for now.
         return raw_resp
@@ -243,12 +251,17 @@ class WekaApi():
 
         # end of _login()
 
-    def weka_api_command(self, *args, **kwargs):
+    #def weka_api_command(self, *args, **kwargs):
+    def weka_api_command(self, method, parms):
         with self._lock:        # make it thread-safe - just in case someone tries to do 2 commands at the same time
             message_id = self.unique_id()
-            method = args[0]
-            request = self.format_request(message_id, args[0], kwargs)
-            log.debug( " submitting command {} {}".format(method, kwargs) )
+            #log.debug(f"args={args}, kwargs={kwargs}")
+            log.debug(f"method={method}, parms={parms}")
+            #method = args[0]
+            #request = self.format_request(message_id, args[0], kwargs)
+            request = self.format_request(message_id, method, parms)
+            #log.debug( " submitting command {} {}".format(method, kwargs) )
+            log.debug( " submitting command {} {}".format(method, parms) )
 
             logginglevel = log.getEffectiveLevel()
 
@@ -327,6 +340,14 @@ class WekaApi():
 
 # main is for testing
 def main():
+    logger = getLogger()
+    logger.setLevel(DEBUG)
+    #log.setLevel(DEBUG)
+    FORMAT = "%(filename)s:%(lineno)s:%(funcName)s():%(message)s"
+    # create handler to log to stderr
+    console_handler = StreamHandler()
+    console_handler.setFormatter(Formatter(FORMAT))
+    logger.addHandler(console_handler)
 
     api_connection = WekaApi( '172.20.0.128' )
 

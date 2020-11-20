@@ -69,7 +69,7 @@ class reservation_list(object):
         with self._lock:
             uberlist = self.available + self.reserved
             for item in uberlist:
-                if item.name == hostname:
+                if str(item) == str(hostname):
                     return True
 
 
@@ -117,6 +117,10 @@ if __name__ == "__main__":
         print( reserved )
         print( str(hostlist) )
 
+    if "name7" in hostlist:
+        print( "it's in there")
+    else:
+        print( "it's NOT in there")
 
 
 
