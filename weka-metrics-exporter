@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# Weka Prometheus client
+# Vince Fleming
+# vince@weka.io
+#
+VERSION="3.1.0"
+
 # system imports
 import logging
 import logging.handlers
@@ -17,10 +23,6 @@ from wekacluster import WekaCluster
 import signals
 
 
-# Weka Prometheus client
-# Vince Fleming
-# vince@weka.io
-#
 
 if __name__ == '__main__':
     # handle signals (ie: ^C and such)
@@ -32,7 +34,12 @@ if __name__ == '__main__':
     parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbosity", action="count", default=0, help="increase output verbosity")
+    parser.add_argument("--version", dest="version", default=False, action="store_true", help="Display version number")
     args = parser.parse_args()
+
+    if args.version:
+        print( f"{sys.argv[0]} version {VERSION}" )
+        sys.exit( 0 )
 
     if args.verbosity == 0:
         loglevel = logging.ERROR
