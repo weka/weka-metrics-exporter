@@ -9,6 +9,11 @@
 
 import threading
 import time
+from logging import debug, info, warning, error, critical, getLogger, DEBUG, StreamHandler
+import logging
+import traceback
+
+log = getLogger(__name__)
 
 # ---------------- start of threader definition ------------
 # manage threads - start only num_simultaneous threads at a time
@@ -26,6 +31,8 @@ class simul_threads():
 
     # create a thread and put it in the list of threads
     def new( self, function, funcargs=None ):
+        log.debug(f"creating new thread, func={function}, funcargs={funcargs}")
+        #log.debug( traceback.print_stack() )
         self.ids += 1
         if funcargs == None:
             self.staged[self.ids] = threading.Thread( target=function )
@@ -42,6 +49,7 @@ class simul_threads():
 
     # look for threads that need reaping, start next thread
     def reaper( self ):
+        log.debug(f"reaping threads")
         for threadid, thread in self.running.items():
             if not thread.is_alive():
                 thread.join()                   # reap it (wait for it)
@@ -58,6 +66,7 @@ class simul_threads():
         # only allow num_simultaneous threads to run at one time
         #print "starter(): self.running has " + str( len( self.running ) ) + " items, and self.staged has " + str( len( self.staged ) ) + " items"
         #print self.num_simultaneous
+        log.debug(f"starting threads")
         while len( self.running ) < self.num_simultaneous and len( self.staged ) > 0:
             threadid, thread = self.staged.popitem()    # take one off the staged list
             thread.start()                              # start it
@@ -71,6 +80,7 @@ class simul_threads():
 
     # run all threads, wait for all to complete
     def run( self ):
+        log.debug(f"running threads")
         while len( self.staged ) + len( self.running ) > 0:
             self.reaper()       # reap any dead threads
             self.starter()      # kick off threads

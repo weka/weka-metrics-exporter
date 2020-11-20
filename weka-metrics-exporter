@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# Weka Prometheus client
+# Vince Fleming
+# vince@weka.io
+#
+VERSION="3.1.0"
+
 # system imports
 import logging
 import logging.handlers
@@ -9,16 +15,14 @@ import os
 import sys
 from prometheus_client import start_http_server, REGISTRY
 import time
+import traceback
 
 # local imports
-from collector import wekaCollector, wekaCluster
+from collector import wekaCollector
+from wekacluster import WekaCluster
 import signals
 
 
-# Weka Prometheus client
-# Vince Fleming
-# vince@weka.io
-#
 
 if __name__ == '__main__':
     # handle signals (ie: ^C and such)
@@ -30,7 +34,12 @@ if __name__ == '__main__':
     parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbosity", action="count", default=0, help="increase output verbosity")
+    parser.add_argument("--version", dest="version", default=False, action="store_true", help="Display version number")
     args = parser.parse_args()
+
+    if args.version:
+        print( f"{sys.argv[0]} version {VERSION}" )
+        sys.exit( 0 )
 
     if args.verbosity == 0:
         loglevel = logging.ERROR
@@ -43,6 +52,8 @@ if __name__ == '__main__':
 
     # set the root logger
     logger = logging.getLogger()
+    FORMAT = "%(filename)s:%(lineno)s:%(funcName)s():%(message)s"
+    #logging.basicConfig(format=FORMAT)
     logger.setLevel(loglevel)
 
     # create handler to log to syslog
@@ -52,8 +63,8 @@ if __name__ == '__main__':
 
     # create handler to log to stderr
     console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(FORMAT))
     #console_handler.setLevel(loglevel)
-    console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 
     # add handlers to root logger
     logger.addHandler(syslog_handler)
@@ -69,7 +80,11 @@ if __name__ == '__main__':
 
     # configure logging in wekaapi module
     sublog = logging.getLogger( "wekaapi" )
-    sublog.setLevel(logging.INFO)   # limit wekaapi output level - it's chatty
+    sublog.setLevel(logging.ERROR)
+
+    # configure logging in sthreads module
+    sublog = logging.getLogger( "sthreads" )
+    sublog.setLevel(logging.ERROR)
 
 
     # parse the command line, get our hosts and associated auth files
@@ -84,13 +99,15 @@ if __name__ == '__main__':
         clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
 
     # create the wekaCollector object
-    collector = wekaCollector( args.autohost, args.configfile )
+    collector = wekaCollector( args.configfile )
     num_good = 0
     for cluster in clusters:
         try:
-            cluster_obj = wekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"] ) 
-        except:
-            logger.critical( "unable to create cluster object" )
+            cluster_obj = WekaCluster( cluster["cluster_hosts"], cluster["cluster_auth"], args.autohost ) 
+        except Exception as exc:
+            track = traceback.format_exc()
+            print(track)
+            logger.critical( f"unable to create cluster object: {exc}" )
             continue
         collector.add_cluster( cluster_obj )
         num_good += 1
@@ -106,7 +123,7 @@ if __name__ == '__main__':
     start_http_server(int(args.port))
 
     # register our custom collector
-    ret = REGISTRY.register( collector )
+    REGISTRY.register( collector )
 
 
     while True:
