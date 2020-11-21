@@ -1,5 +1,9 @@
 # Weka Metrics Exporter
 
+Version 3.5.0:
+
+Added much more error checking and more complete logging.  Changed Docker image to run unprivledged in the container.  Added --version to weka-metrics-exporter so you can see what version you're running.
+
 All-new Version 3
 
 Metrics exporter for WekaFS. Gathers metrics and statistics from Weka Clusters and exposes a metrics endpoint for Prometheus to scrape.
@@ -19,7 +23,7 @@ The simplest installation is to get the docker container via `docker pull weka-s
 This package should be combined with our Grafana panel, available at `https://github.com/weka/grafana-dashboards`  Follow the instructions there for simple installation.
 
 To run outside a container:
-1. Unpack tarball or clone repository.
+1. Unpack tarball from Releases or clone repository.
 2. Make sure you have Python 3.5+ and `pip` installed on your machine.
 3. Install package dependencies: `pip install -r requirements.txt`.
 
