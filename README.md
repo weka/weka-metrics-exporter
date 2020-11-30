@@ -47,11 +47,11 @@ To ensure that the container has access to DNS, use the ```--network=host``` dir
 
 If you do not use the ```--network=host```, then you might want to map /etc/hosts into the container with: ```--mount type=bind,source=/etc/hosts,target=/etc/hosts``` so hostnames in the cluster are resolved to ip addresses via /etc/hosts.
 
-If you have changed the default password on the cluster, you will need to pass authentication tokens to the container with ```--mount type=bind,source=/root/.weka/,target=/root/.weka/```.  Use the ```weka user login ``` command to generate the tokens, which by default are stored in ```~/.weka/```
+If you have changed the default password on the cluster, you will need to pass authentication tokens to the container with ```--mount type=bind,source=/root/.weka/,target=/weka/.weka/```.  Use the ```weka user login ``` command to generate the tokens, which by default are stored in ```~/.weka/```
 
 To have messages logged via syslog on the docker host, use ```--mount type=bind,source=/dev/log,target=/dev/log```  On most hosts, these messages will appear in ```/var/log/messages``` 
 
-If you would like to change the metrics gathered, you can modify the weka-metrics-exporter.yml configuration file, then map that into the container with ```--mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml```
+If you would like to change the metrics gathered, you can modify the weka-metrics-exporter.yml configuration file, then map that into the container with ```--mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/weka/weka-metrics-exporter.yml```
 
 Clusters are specified as a list of hostnames or ip addresses, with an optional authfile (see above) like so: ```<wekahost>,<wekahost>,<wekahost>:authfile```, with the minimum being a single wekahost.
 
@@ -61,10 +61,10 @@ For example:
 
 ```
 docker run -d --network=host \
-  --mount type=bind,source=/root/.weka/,target=/root/.weka/ \
+  --mount type=bind,source=/root/.weka/,target=/weka/.weka/ \
   --mount type=bind,source=/dev/log,target=/dev/log \
   --mount type=bind,source=/etc/hosts,target=/etc/hosts \
-  --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/root/weka-metrics-exporter.yml \
+  --mount type=bind,source=$PWD/weka-metrics-exporter.yml,target=/weka/weka-metrics-exporter.yml \
   wekasolutions/metrics-exporter -vv -a weka01, weka02,weka09:~/.weka/myauthfile
 ```
 
