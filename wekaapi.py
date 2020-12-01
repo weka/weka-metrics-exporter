@@ -69,6 +69,7 @@ class WekaApi():
         self._timeout = timeout
         self._tokens=self._get_tokens(token_file)
         self.headers = {}
+        log.debug( f"tokens are {self._tokens}" )
         if self._tokens != None:
             self.authorization = '{0} {1}'.format(self._tokens['token_type'], self._tokens['access_token'])
             self.headers["Authorization"] = self.authorization
@@ -118,15 +119,17 @@ class WekaApi():
             try:
                 if self._scheme == "https":
                     self._conn = httpclient.HTTPSConnection(self._host, self._port, timeout=self._timeout)
+                    log.debug( f"httpclient.HTTPSConnection succeeded? {self._conn}" )
                 else:
                     self._conn = httpclient.HTTPConnection(self._host, self._port, timeout=self._timeout)
             except Exception as exc:
-                log.critical( " _open_connection(): {}: unable to open connection to {}".format(exc, self._host) )
+                log.critical( f" _open_connection(): {exc}: unable to open connection to {self.host}" )
                 host_unreachable = True
 
             if not host_unreachable:
                 try:
-                    self._login()
+                    # test a command?
+                    self._login()   # should we be doing this here?
                     return
                 except ssl.SSLError:
                     # https failed, try http - http would never produce an ssl error
@@ -138,7 +141,7 @@ class WekaApi():
                     host_unreachable=True
                     try_again = False
                 except Exception as exc:   # any other failure
-                    log.critical(f"{exc}")
+                    log.critical(f"Login Failure:{exc}")
                     host_unreachable=True
                     try_again = False
 
@@ -147,6 +150,8 @@ class WekaApi():
 
 
     def _get_tokens(self, token_file):
+        error=False
+        log.debug(f"token_file={token_file}")
         if token_file != None:
             tokens=None
             path = os.path.expanduser(token_file)
@@ -157,10 +162,15 @@ class WekaApi():
                     return tokens
                 except Exception as error:
                     log.critical( " unable to open token file {}".format(token_file) )
-                    raise WekaApiException('warning: Could not parse {0}, ignoring file'.format(path), file=sys.stderr)
+                    error=True
             else:
+                error=True
                 log.error( " token file {} not found".format(token_file) )
-        return None
+
+        if error:
+            raise WekaApiException('warning: Could not parse {0}, ignoring file'.format(path), file=sys.stderr)
+        else:
+            return None
 
 
 
@@ -214,7 +224,43 @@ class WekaApi():
         return raw_resp
     # end of _format_response()
 
-    # log into the api
+    def old_login( self ):
+        login_message_id = self.unique_id()
+
+        log.debug( "logging into host {}".format(self._host) )
+
+        if self._tokens != None:
+            params = dict(refresh_token=self._tokens["refresh_token"])
+            login_request = self.format_request(login_message_id, "user_refresh_token", params)
+        else:
+            params = dict(username="admin", password="admin")
+            login_request = self.format_request(login_message_id, "user_login", params)
+
+        #self._conn.set_debuglevel(5)
+        self._conn.request('POST', self._path, json.dumps(login_request), self.headers) # POST either user_refresh_token or user_login
+        #self._conn.set_debuglevel(0)
+        response = self._conn.getresponse()
+        response_body = response.read().decode('utf-8')
+
+        log.debug(f"response.status={response.status}")
+        if response.status != 200:  # default login creds/refresh failed
+            raise HttpException(response.status, response_body)
+
+        response_object = json.loads(response_body)
+        log.debug(f"response_object={response_object}")
+        self._tokens = response_object["result"]
+        if self._tokens != {}:
+            self.authorization = '{0} {1}'.format(self._tokens['token_type'], self._tokens['access_token'])
+        else:
+            self.authorization = None
+            self._tokens= None
+            log.critical( "Login failed" )
+            raise WekaApiException( "Login failed" )
+
+        # end of old_login()
+
+
+    # log into the api  # assumes that you got an UNAUTHORIZED (401)
     def _login( self ):
         login_message_id = self.unique_id()
 
@@ -227,7 +273,7 @@ class WekaApi():
             params = dict(username="admin", password="admin")
             login_request = self.format_request(login_message_id, "user_login", params)
 
-        log.debug( "logging into host {}".format(self._host) )
+        log.debug( "reauthorizing with host {}".format(self._host) )
 
         self._conn.request('POST', self._path, json.dumps(login_request), self.headers) # POST a user_login request
         response = self._conn.getresponse()

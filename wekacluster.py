@@ -18,7 +18,10 @@ class WekaHost(object):
         # do we need a backpointer to the cluster?
 
         try:
-            self.api_obj = WekaApi(self.name, token_file=self.apitoken, timeout=10)
+            if self.apitoken != None:
+                self.api_obj = WekaApi(self.name, token_file=self.apitoken, timeout=10)
+            else:
+                self.api_obj = WekaApi(self.name, timeout=10)
         except Exception as exc:
             log.error(f"{exc}")
 
@@ -88,6 +91,7 @@ class WekaCluster(object):
         # get the cluster name via a manual api call    (failure raises and fails creation of obj)
         api_return = self.call_api( method="status", parms={} )
         self.name = api_return['name']
+        self.GUID = api_return['guid']
 
         #log.debug( self.hosts )
         #log.debug( "wekaCluster {} created. Cluster has {} members, {} are online".format(self.name, self.clustersize, len(self.hosts)) )
@@ -120,6 +124,8 @@ class WekaCluster(object):
                             self.hosts.add(hostobj)
         log.debug( "wekaCluster {} refreshed. Cluster has {} members, {} are online".format(self.name, self.clustersize, len(self.hosts)) )
 
+    def get_guid(self):
+        return self.GUID
 
     def __str__(self):
         return str(self.name)
