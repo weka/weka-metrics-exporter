@@ -4,7 +4,7 @@
 # Vince Fleming
 # vince@weka.io
 #
-VERSION="3.5.1"
+VERSION="3.6.0"
 
 # system imports
 import logging
@@ -16,6 +16,7 @@ import sys
 from prometheus_client import start_http_server, REGISTRY
 import time
 import traceback
+from lokilogs import LokiServer
 
 # local imports
 from collector import wekaCollector
@@ -31,6 +32,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
     parser.add_argument("-c", "--configfile", dest='configfile', default="./weka-metrics-exporter.yml", help="override ./weka-metrics-exporter.yml as config file")
     parser.add_argument("-p", "--port", dest='port', default="8001", help="TCP port number to listen on")
+    parser.add_argument("--loki_host", dest='lokihost', default=None, help="hostname/ip for loki server")
+    parser.add_argument("--loki_port", dest='lokiport', default="3100", help="port for loki server")
     parser.add_argument( 'clusterspec', default="localhost", nargs='*', help="Cluster specifications.  <host>,<host>,...:authfile" )
     parser.add_argument("-a", "--autohost", dest='autohost', default=False, action="store_true", help="Automatically load balance queries over backend hosts" )
     parser.add_argument("-v", "--verbosity", action="count", default=0, help="increase output verbosity")
@@ -86,6 +89,10 @@ if __name__ == '__main__':
     sublog = logging.getLogger( "sthreads" )
     sublog.setLevel(logging.ERROR)
 
+    # configure logging in lokilogs module
+    sublog = logging.getLogger( "lokilogs" )
+    sublog.setLevel(logging.ERROR)
+
 
     # parse the command line, get our hosts and associated auth files
     clusters = []
@@ -98,6 +105,7 @@ if __name__ == '__main__':
             cluster_auth = None
         clusters.append( dict ( cluster_hosts=cluster_hosts, cluster_auth=cluster_auth ) )
 
+    cluster_list = []
     # create the wekaCollector object
     collector = wekaCollector( args.configfile )
     num_good = 0
@@ -110,11 +118,17 @@ if __name__ == '__main__':
             logger.critical( f"unable to create cluster object: {exc}" )
             continue
         collector.add_cluster( cluster_obj )
+        cluster_list.append( cluster_obj )
         num_good += 1
 
     if num_good == 0:
         logger.critical( "no clusters could be contacted, aborting" )
         sys.exit( 1 )
+
+    if args.lokihost != None:
+        lokiserver = LokiServer( args.lokihost, args.lokiport )
+    else:
+        lokiserver = None
 
     #
     # Start up the server to expose the metrics.
@@ -127,4 +141,19 @@ if __name__ == '__main__':
 
 
     while True:
-        time.sleep(60)
+        if lokiserver != None:
+            for cluster in cluster_list:
+                logger.info(f"getting events for cluster {cluster.name}")
+                events = lokiserver.get_events( cluster )
+                lokiserver.send_events( events, cluster )
+        time.sleep(30)
+
+
+
+
+
+
+
+
+
+

@@ -2,7 +2,7 @@ FROM alpine:latest
 
 RUN apk add --no-cache bash curl python3 py3-pip
 
-RUN pip3 install prometheus_client pyyaml
+RUN pip3 install prometheus_client pyyaml python-dateutil
 
 ARG BASEDIR="/weka"
 ARG ID="472"
@@ -20,9 +20,10 @@ COPY signals.py $BASEDIR
 COPY sthreads.py $BASEDIR
 COPY wekaapi.py $BASEDIR
 COPY wekacluster.py $BASEDIR
+COPY lokilogs.py $BASEDIR
 
 RUN addgroup -S -g $ID $USER &&\
-    adduser -S -u $ID -G $USER $USER && \
+    adduser -S -h $BASEDIR -u $ID -G $USER $USER && \
     chown -R $USER:$USER $BASEDIR
 
 RUN chmod +x $BASEDIR/weka-metrics-exporter

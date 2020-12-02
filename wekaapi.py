@@ -161,11 +161,11 @@ class WekaApi():
                         tokens = json.load( fp )
                     return tokens
                 except Exception as error:
-                    log.critical( " unable to open token file {}".format(token_file) )
+                    log.critical( "unable to open token file {}".format(token_file) )
                     error=True
             else:
                 error=True
-                log.error( " token file {} not found".format(token_file) )
+                log.error( "token file {} not found".format(token_file) )
 
         if error:
             raise WekaApiException('warning: Could not parse {0}, ignoring file'.format(path), file=sys.stderr)

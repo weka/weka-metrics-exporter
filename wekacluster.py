@@ -5,7 +5,9 @@ import logging
 from wekaapi import WekaApi
 from reserve import reservation_list
 import traceback
+import urllib3
 from threading import Lock
+import json
 
 log = getLogger(__name__)
 
@@ -16,6 +18,7 @@ class WekaHost(object):
         self.api_obj = None
         self._lock = Lock()
         # do we need a backpointer to the cluster?
+        log.debug(f"authfile={tokenfile}")
 
         try:
             if self.apitoken != None:
@@ -56,42 +59,24 @@ class WekaCluster(object):
         self.orig_hostlist = None
         self.name = ""
 
+        self.cloud_url = None
+        self.cloud_creds = None
+        self.event_descs = None
+        self.cloud_proxy = None
+        self.cloud_http_pool = None
+
         self.orig_hostlist = hostname.split(",")  # takes a comma-separated list of hosts
         self.hosts = reservation_list()
         self.authfile = authfile
         self.loadbalance = autohost
+        self.last_event_timestamp = None
 
-        """
-        # create objects for the hosts
-        for hostname in self.orig_hostlist:
-            try:
-                hostobj = WekaHost(hostname, self.authfile)
-            except:
-                pass
-            else:
-                self.hosts.add(hostobj)
-
-        # get the rest of the cluster
-        api_return = self.call_api( method="hosts_list", parms={} )
-        for host in api_return:
-            hostname = host["hostname"]
-            if host["mode"] == "backend":
-                self.clustersize += 1
-                if host["state"] == "ACTIVE" and host["status"] == "UP":
-                    if not hostname in self.hosts:
-                        try:
-                            hostobj = WekaHost(hostname, self.authfile)
-                        except:
-                            pass
-                        else:
-                            self.hosts.add(hostobj)
-        """
         self.refresh_config()
 
         # get the cluster name via a manual api call    (failure raises and fails creation of obj)
         api_return = self.call_api( method="status", parms={} )
         self.name = api_return['name']
-        self.GUID = api_return['guid']
+        self.guid = api_return['guid']
 
         #log.debug( self.hosts )
         #log.debug( "wekaCluster {} created. Cluster has {} members, {} are online".format(self.name, self.clustersize, len(self.hosts)) )
@@ -122,10 +107,28 @@ class WekaCluster(object):
                             pass
                         else:
                             self.hosts.add(hostobj)
-        log.debug( "wekaCluster {} refreshed. Cluster has {} members, {} are online".format(self.name, self.clustersize, len(self.hosts)) )
 
-    def get_guid(self):
-        return self.GUID
+        # weka-home setup
+        self.cloud_url = self.call_api( method="cloud_get_url", parms={} )
+        log.critical(f"cloud_url='{self.cloud_url}'")
+        self.cloud_creds = self.call_api( method="cloud_get_creds", parms={} )
+        temp = self.call_api( method="events_describe", parms={"show_internal":False} )
+
+        # make a dict of {event_type: event_desc}
+        self.event_descs = {}
+        for event in temp:
+            self.event_descs[event["type"]] = event
+
+        # need to do something with this
+        self.cloud_proxy = self.call_api( method="cloud_get_proxy", parms={} )
+        if len(self.cloud_proxy["proxy"]) != 0:
+            log.debug(f"Using proxy={self.cloud_proxy['proxy']}")
+            self.cloud_http_pool = urllib3.ProxyManager(self.cloud_proxy["proxy"])
+        else:
+            self.cloud_http_pool = urllib3.PoolManager()
+
+
+        log.debug( "wekaCluster {} refreshed. Cluster has {} members, {} are online".format(self.name, self.clustersize, len(self.hosts)) )
 
     def __str__(self):
         return str(self.name)
@@ -159,6 +162,81 @@ class WekaCluster(object):
         raise Exception("unable to communicate with cluster")
 
         # ------------- end of call_api() -------------
+
+    # interface to weka-home
+    def home_events( self,
+            num_results = None,
+            start_time = None,
+            end_time = None,
+            severity = None,
+            type_list = None,
+            category_list = None,
+            sort_order = None,
+            by_digested_time = False,
+            show_internal = False
+            ):
+        # Weka Home uses a different API style than the cluster... 
+        url = f"{self.cloud_url}/api/{self.guid}/events/list"
+        headers={"Authorization": "%s %s" % (self.cloud_creds["token_type"], self.cloud_creds["access_token"])}
+
+        fields={}
+        if num_results != None:
+            fields["lmt"] = num_results
+
+        if start_time != None:
+            fields["frm"] = start_time
+
+        if end_time != None:
+            fields["to"] = end_time
+
+        if severity != None:
+            fields["svr"] = severity
+
+        if type_list != None:
+            log.error("not implemented")
+
+        if category_list != None:
+            log.error("not implemented")
+
+        if sort_order != None:
+            fields["srt"] = sort_order
+
+        if by_digested_time:
+            fields["dt"] = "t"
+        else:
+            fields["dt"] = "f"
+
+        if show_internal:
+            fields["intr"] = "t"
+        else:
+            fields["intr"] = "f"
+
+        # get from weka-home
+        try:
+            resp = self.cloud_http_pool.request( 'GET', url, fields=fields, headers=headers)
+        except Exception as exc:
+            log.critical(f"GET request failure: {exc}")
+            return []
+
+        events = json.loads(resp.data.decode('utf-8'))
+
+        if len(events) == 0:
+            log.debug("no events!")
+            return []
+
+        # format the descriptions; they don't come pre-formatted
+        for event in events:
+            event_type = event["type"]
+            if event_type in self.event_descs:
+                format_string = self.event_descs[event_type]["formatString"]
+                params = event["params"]
+                event["description"] = format_string.format(**params)
+            else:
+                log.debug(f"unknown event type {event['type']}")
+
+        #log.debug( json.dumps( events, indent=4, sort_keys=True ) )
+        return( events )
+
 
 if __name__ == "__main__":
     logger = getLogger()
