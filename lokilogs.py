@@ -92,7 +92,11 @@ class LokiServer(object):
             return( False )
 
         # check the return code
-        if answer.status_code != 204:  # 204 is ok
+        if answer.status_code == 400:
+            # I've only seen code 400 for duplicate entries; but I could be wrong. ;)
+            log.error(f"Error posting event; possible duplicate entry: {answer.text}")
+            return( True )  # ignore the error so we don't retry submission forever
+        elif answer.status_code != 204:  # 204 is ok
             log.error( "loki_logevent(): bad http status code: " + str( answer.status_code ) + " " + answer.text )
             return( False )
 
@@ -122,8 +126,9 @@ class LokiServer(object):
             description = f"cluster:{cluster.name} :{event['severity']}: {event['type']}: {event['description']}"
             log.debug(f"sending event: timestamp={timestamp}, labels={labels}, desc={description}")
 
-            self.loki_logevent( timestamp, description, labels=labels )
-            cluster.last_event_timestamp = datetime_to_wekatime( datetime.datetime.utcnow() )
+            if self.loki_logevent( timestamp, description, labels=labels ):
+                # only update time if upload successful, so we don't drop events (they should retry upload next time)
+                cluster.last_event_timestamp = datetime_to_wekatime( datetime.datetime.utcnow() )
 
         # end send_events
 
