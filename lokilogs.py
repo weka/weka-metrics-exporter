@@ -23,6 +23,7 @@ import time
 import urllib3
 import wekacluster
 from wekaapi import WekaApi
+from wekatime import wekatime_to_lokitime, lokitime_to_wekatime, wekatime_to_datetime, lokitime_to_datetime, datetime_to_wekatime, datetime_to_lokitime
 from logging import debug, info, warning, error, critical, getLogger, DEBUG, StreamHandler, Formatter
 
 log = getLogger(__name__)
@@ -107,6 +108,7 @@ class LokiServer(object):
     # format the events and send them up to Loki
     def send_events(self, event_dict, cluster):
 
+        num_successful = 0
 
         if len(event_dict) == 0:
             log.debug("No events to send")
@@ -114,7 +116,7 @@ class LokiServer(object):
 
         # must be sorted by timestamp or Loki will reject them
         last_eventtime = "0"
-        for timestamp, event in sorted(event_dict.items()):
+        for timestamp, event in sorted(event_dict.items()): # oldest first
             labels = {
                 "type": "weka",
                 "cluster": cluster.name
@@ -123,29 +125,47 @@ class LokiServer(object):
                 #"type": event["type"],
                 #"severity": event["severity"],
                 #"node_id": event["nid"],
+
+            # map weka event severities to Loki event severities
+            if event['severity'] == 'MAJOR' or event['severity'] == 'MINOR':
+                event['severity'] = 'ERROR'
+            elif event['severity'] == 'CRITICAL':
+                event['severity'] = 'FATAL'
+
             description = f"cluster:{cluster.name} :{event['severity']}: {event['type']}: {event['description']}"
             log.debug(f"sending event: timestamp={timestamp}, labels={labels}, desc={description}")
 
             if self.loki_logevent( timestamp, description, labels=labels ):
                 # only update time if upload successful, so we don't drop events (they should retry upload next time)
-                cluster.last_event_timestamp = datetime_to_wekatime( datetime.datetime.utcnow() )
+                #cluster.last_event_timestamp = datetime_to_wekatime( datetime.datetime.utcnow() )
+                #cluster.last_event_timestamp = lokitime_to_wekatime( timestamp ) # take the event timestamp?
+                num_successful += 1
+
+        log.info(f"Total events={len(event_dict)}; successfully sent {num_successful} events")
+        if num_successful != 0:
+            cluster.last_event_timestamp = cluster.last_get_events_time
 
         # end send_events
 
     # example:
     #https://api.home.weka.io/api/23a0d764-e77d-48d3-ab28-4cdd7167a822/events/list?intr=f&dt=f&svr=INFO&frm=2019-11-24T16:20:06.0352292Z&srt=dsc&lmt=50&to=2020-11-23T16:20:06.0353582Z
 
+    # moved to wekacluster.py
     # get events from Weka
-    def get_events( self, cluster ):
-        log.debug( "getting events" )
+    #def get_events( self, cluster ):
+    #    log.debug( "getting events" )
 
-        events = cluster.home_events( 
-                    num_results=100,
-                    start_time=cluster.last_event_timestamp, 
-                    end_time=datetime_to_wekatime(datetime.datetime.utcnow()),
-                    severity="INFO" )
+    #    end_time = datetime_to_wekatime(datetime.datetime.utcnow())
+    #    events = cluster.home_events( 
+    #                num_results=100,
+    #                start_time=cluster.last_event_timestamp, 
+    #                end_time,
+    #                severity="INFO" )
 
-        return reformat_events( events )
+    #    # note the time of this last fetch, if it was successful (failure will cause exception)
+    #    self.last_get_events_time = end_time
+
+    #    return reformat_events( events )
 
         # ------------- end get_events() ----------
 
@@ -218,12 +238,13 @@ def last_lokievent_time(lokihost, port, cluster):
 #    return( lokitime_to_wekatime(last_lokievent_time(lokihost, port, cluster)) )
 
 
-# takes in a list of dicts - [{event},{event},{event}].  Change to a dict of {timestamp:{event},timestamp:{event}} so we can sort by timestamp
-def reformat_events( weka_events ):
-    event_dict={}
-    for event in weka_events:
-        event_dict[wekatime_to_lokitime(event["timestamp"])] = event
-    return event_dict
+# moved to wekacluster.py
+## takes in a list of dicts - [{event},{event},{event}].  Change to a dict of {timestamp:{event},timestamp:{event}} so we can sort by timestamp
+#def reformat_events( weka_events ):
+#    event_dict={}
+#    for event in weka_events:
+#        event_dict[wekatime_to_lokitime(event["timestamp"])] = event
+#    return event_dict
 
         # debugging
         #origtime = event["timestamp"]

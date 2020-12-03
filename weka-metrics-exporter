@@ -70,7 +70,7 @@ if __name__ == '__main__':
     #console_handler.setLevel(loglevel)
 
     # add handlers to root logger
-    logger.addHandler(syslog_handler)
+    #logger.addHandler(syslog_handler)
     logger.addHandler(console_handler)
 
     # configure logging in signals module
@@ -91,7 +91,7 @@ if __name__ == '__main__':
 
     # configure logging in lokilogs module
     sublog = logging.getLogger( "lokilogs" )
-    sublog.setLevel(logging.ERROR)
+    sublog.setLevel(logging.INFO)
 
 
     # parse the command line, get our hosts and associated auth files
@@ -144,7 +144,7 @@ if __name__ == '__main__':
         if lokiserver != None:
             for cluster in cluster_list:
                 logger.info(f"getting events for cluster {cluster.name}")
-                events = lokiserver.get_events( cluster )
+                events = cluster.get_events()
                 lokiserver.send_events( events, cluster )
         time.sleep(30)
 

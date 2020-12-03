@@ -3,9 +3,11 @@ from logging import debug, info, warning, error, critical, getLogger, DEBUG, Str
 import logging
 
 from wekaapi import WekaApi
+from wekatime import wekatime_to_lokitime, lokitime_to_wekatime, wekatime_to_datetime, lokitime_to_datetime, datetime_to_wekatime, datetime_to_lokitime
 from reserve import reservation_list
 import traceback
 import urllib3
+import datetime
 from threading import Lock
 import json
 
@@ -70,6 +72,7 @@ class WekaCluster(object):
         self.authfile = authfile
         self.loadbalance = autohost
         self.last_event_timestamp = None
+        self.last_get_events_time = None
 
         self.refresh_config()
 
@@ -236,6 +239,31 @@ class WekaCluster(object):
 
         #log.debug( json.dumps( events, indent=4, sort_keys=True ) )
         return( events )
+
+    # get events from Weka
+    def get_events( self ):
+        log.debug( "getting events" )
+
+        end_time = datetime_to_wekatime(datetime.datetime.utcnow())
+        events = self.home_events( 
+                    num_results=100,
+                    start_time=self.last_event_timestamp, 
+                    end_time=end_time,
+                    severity="INFO" )
+
+        # note the time of this last fetch, if it was successful (failure will cause exception)
+        self.last_get_events_time = end_time
+
+        return self.reformat_events( events )
+
+        # ------------- end get_events() ----------
+
+    # takes in a list of dicts - [{event},{event},{event}].  Change to a dict of {timestamp:{event},timestamp:{event}} so we can sort by timestamp
+    def reformat_events( self, weka_events ):
+        event_dict={}
+        for event in weka_events:
+            event_dict[wekatime_to_lokitime(event["timestamp"])] = event
+        return event_dict
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ COPY sthreads.py $BASEDIR
 COPY wekaapi.py $BASEDIR
 COPY wekacluster.py $BASEDIR
 COPY lokilogs.py $BASEDIR
+COPY wekatime.py $BASEDIR
 
 RUN addgroup -S -g $ID $USER &&\
     adduser -S -h $BASEDIR -u $ID -G $USER $USER && \
